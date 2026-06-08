@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtual env
+.venv/
+venv/
+
+# Pipeline outputs / generated data
+data/
+*.fits
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# astroquery / astropy caches
+.astropy/

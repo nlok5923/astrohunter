@@ -1,0 +1,161 @@
+"""MPC report generation: ADES (PSV) and legacy 80-column (obs80).
+
+Research finding: ADES is now the dominant submission format; the hard acceptance
+gate is server-side validation against submit.xsd (the MPC performs the
+PSV->XML conversion and validation themselves). We therefore emit standards-shaped
+ADES PSV with the required columns and ISO-8601 UTC timestamps, plus a best-effort
+obs80 line for the legacy channel. This does NOT submit anything — it produces a
+file a human reviews before submitting.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+import numpy as np
+from astropy.coordinates import Angle
+from astropy.time import Time
+import astropy.units as u
+
+
+@dataclass
+class ObsMetadata:
+    obs_code: str = "XXX"          # MPC observatory code (XXX = unassigned/placeholder)
+    observer: str = "Unknown"
+    measurer: str = "Unknown"
+    telescope_design: str = "reflector"
+    aperture_m: float = 0.0
+    detector: str = "CCD"
+    ast_cat: str = "Gaia3"         # astrometric reference catalogue (ADES code)
+    band: str = "G"
+    submitter: str = "Unknown"
+    extra: dict = field(default_factory=dict)
+
+
+# ADES PSV columns we populate (subset of the standard, sufficient for submission).
+_ADES_COLUMNS = [
+    "trkSub", "mode", "stn", "obsTime", "ra", "dec",
+    "rmsRA", "rmsDec", "mag", "band", "astCat", "remarks",
+]
+
+
+def _iso_utc(mjd: float) -> str:
+    t = Time(mjd, format="mjd", scale="utc")
+    s = t.isot  # 'YYYY-MM-DDTHH:MM:SS.sss'
+    if "." not in s:
+        s += ".000"
+    # ADES wants fractional seconds; keep millisecond precision and a trailing Z.
+    head, frac = s.split(".")
+    return f"{head}.{frac[:3]:<03}Z"
+
+
+def _trksub(index: int) -> str:
+    # Up to 8 chars; deterministic per-run temporary tracklet id.
+    return f"aH{index:05d}"[:8]
+
+
+def tracklet_to_ades_rows(tracklet, meta: ObsMetadata, index: int):
+    rows = []
+    trk = _trksub(index)
+    for d in tracklet.detections:
+        rms = f"{tracklet.rms_arcsec:.2f}" if np.isfinite(tracklet.rms_arcsec) else ""
+        mag = f"{d.mag:.1f}" if np.isfinite(d.mag) else ""
+        rows.append({
+            "trkSub": trk,
+            "mode": "CCD",
+            "stn": meta.obs_code,
+            "obsTime": _iso_utc(d.time_mjd),
+            "ra": f"{d.ra:.6f}",
+            "dec": f"{d.dec:+.6f}",
+            "rmsRA": rms,
+            "rmsDec": rms,
+            "mag": mag,
+            "band": meta.band,
+            "astCat": meta.ast_cat,
+            "remarks": tracklet.known_name or "",
+        })
+    return rows
+
+
+def write_ades_psv(tracklets, meta: ObsMetadata, path: str) -> str:
+    """Write an ADES PSV file for all (candidate) tracklets. Returns the path."""
+    lines = []
+    # Header metadata blocks (# = block, ! = key/value).
+    lines.append("# version=2017")
+    lines.append("# observatory")
+    lines.append(f"! mpcCode {meta.obs_code}")
+    lines.append("# submitter")
+    lines.append(f"! name {meta.submitter}")
+    lines.append("# observers")
+    lines.append(f"! name {meta.observer}")
+    lines.append("# measurers")
+    lines.append(f"! name {meta.measurer}")
+    lines.append("# telescope")
+    lines.append(f"! design {meta.telescope_design}")
+    if meta.aperture_m:
+        lines.append(f"! aperture {meta.aperture_m}")
+    lines.append(f"! detector {meta.detector}")
+
+    # PSV data header + rows.
+    lines.append("|".join(_ADES_COLUMNS))
+    idx = 1
+    for trk in tracklets:
+        for row in tracklet_to_ades_rows(trk, meta, idx):
+            lines.append("|".join(str(row[c]) for c in _ADES_COLUMNS))
+        idx += 1
+
+    text = "\n".join(lines) + "\n"
+    with open(path, "w") as f:
+        f.write(text)
+    return path
+
+
+# --- legacy 80-column (obs80) ----------------------------------------------
+
+def _obs80_date(mjd: float) -> str:
+    t = Time(mjd, format="mjd", scale="utc")
+    y, mo, d, h, mi, s = t.ymdhms
+    frac_day = (h + mi / 60.0 + s / 3600.0) / 24.0
+    day = d + frac_day
+    return f"{y:4d} {mo:02d} {day:08.5f}"
+
+
+def tracklet_to_obs80(tracklet, meta: ObsMetadata, index: int):
+    lines = []
+    desig = _trksub(index)  # temporary designation in cols 6-12
+    for k, d in enumerate(tracklet.detections):
+        ra_str = Angle(d.ra, u.deg).to_string(unit=u.hour, sep=" ", precision=2, pad=True)
+        dec_str = Angle(d.dec, u.deg).to_string(
+            unit=u.deg, sep=" ", precision=1, pad=True, alwayssign=True
+        )
+        date_str = _obs80_date(d.time_mjd)
+        disc = "*" if k == 0 else " "
+        mag = f"{d.mag:4.1f}" if np.isfinite(d.mag) else "    "
+        line = (
+            f"{'':5}"            # cols 1-5: number (blank, unnumbered)
+            f"{desig:<7.7}"      # cols 6-12: temporary designation
+            f"{disc}"            # col 13: discovery asterisk
+            f"{' '}"             # col 14: note 1
+            f"{'C'}"             # col 15: note 2 (CCD)
+            f"{date_str:<17.17}" # cols 16-32: date
+            f"{ra_str:<12.12}"   # cols 33-44: RA
+            f"{dec_str:<12.12}"  # cols 45-56: Dec
+            f"{'':9}"            # cols 57-65: blank
+            f"{mag:<5.5} "       # cols 66-71: mag + band
+            f"{meta.band:1.1}"
+            f"{'':5}"            # cols 72-77: blank
+            f"{meta.obs_code:>3.3}"  # cols 78-80: obs code
+        )
+        lines.append(line[:80])
+    return lines
+
+
+def write_obs80(tracklets, meta: ObsMetadata, path: str) -> str:
+    lines = []
+    idx = 1
+    for trk in tracklets:
+        lines.extend(tracklet_to_obs80(trk, meta, idx))
+        idx += 1
+    with open(path, "w") as f:
+        f.write("\n".join(lines) + ("\n" if lines else ""))
+    return path
