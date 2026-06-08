@@ -10,7 +10,9 @@ file a human reviews before submitting.
 
 from __future__ import annotations
 
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
+from xml.dom import minidom
 
 import numpy as np
 from astropy.coordinates import Angle
@@ -158,4 +160,60 @@ def write_obs80(tracklets, meta: ObsMetadata, path: str) -> str:
         idx += 1
     with open(path, "w") as f:
         f.write("\n".join(lines) + ("\n" if lines else ""))
+    return path
+
+
+# --- ADES XML (the MPC's preferred representation) -------------------------
+
+def _sub(parent, tag, text):
+    el = ET.SubElement(parent, tag)
+    el.text = str(text)
+    return el
+
+
+def build_ades_xml(tracklets, meta: ObsMetadata) -> str:
+    """Build an ADES XML document string (preference order XML > PSV > obs80)."""
+    ades = ET.Element("ades", {"version": "2017"})
+    block = ET.SubElement(ades, "obsBlock")
+
+    ctx = ET.SubElement(block, "obsContext")
+    obs = ET.SubElement(ctx, "observatory")
+    _sub(obs, "mpcCode", meta.obs_code)
+    _sub(ET.SubElement(ctx, "submitter"), "name", meta.submitter)
+    _sub(ET.SubElement(ctx, "observers"), "name", meta.observer)
+    _sub(ET.SubElement(ctx, "measurers"), "name", meta.measurer)
+    tel = ET.SubElement(ctx, "telescope")
+    _sub(tel, "design", meta.telescope_design)
+    if meta.aperture_m:
+        _sub(tel, "aperture", meta.aperture_m)
+    _sub(tel, "detector", meta.detector)
+
+    data = ET.SubElement(block, "obsData")
+    idx = 1
+    for trk in tracklets:
+        for row in tracklet_to_ades_rows(trk, meta, idx):
+            opt = ET.SubElement(data, "optical")
+            _sub(opt, "trkSub", row["trkSub"])
+            _sub(opt, "mode", row["mode"])
+            _sub(opt, "stn", row["stn"])
+            _sub(opt, "obsTime", row["obsTime"])
+            _sub(opt, "ra", row["ra"])
+            _sub(opt, "dec", row["dec"].lstrip("+"))
+            if row["rmsRA"]:
+                _sub(opt, "rmsRA", row["rmsRA"])
+            if row["rmsDec"]:
+                _sub(opt, "rmsDec", row["rmsDec"])
+            _sub(opt, "astCat", row["astCat"])
+            if row["mag"]:
+                _sub(opt, "mag", row["mag"])
+                _sub(opt, "band", row["band"])
+        idx += 1
+
+    rough = ET.tostring(ades, encoding="unicode")
+    return minidom.parseString(rough).toprettyxml(indent="  ")
+
+
+def write_ades_xml(tracklets, meta: ObsMetadata, path: str) -> str:
+    with open(path, "w") as f:
+        f.write(build_ades_xml(tracklets, meta))
     return path

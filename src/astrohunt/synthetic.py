@@ -36,6 +36,8 @@ class SyntheticConfig:
     asteroid_pa_deg: float = 55.0           # direction of motion
     cadence_min: float = 15.0
     start_iso: str = "2026-06-08T10:00:00"
+    n_cosmic_rays: int = 0          # per frame, at random positions (test vetting)
+    cosmic_ray_flux: float = 5.0e4
     seed: int = 7
 
 
@@ -63,7 +65,7 @@ def _add_psf(img, x, y, flux, fwhm):
     img[yi0:yi1, xi0:xi1] += g
 
 
-def generate(cfg: SyntheticConfig, outdir: str):
+def generate(cfg: SyntheticConfig, outdir: str, strip_wcs: bool = False):
     os.makedirs(outdir, exist_ok=True)
     rng = np.random.default_rng(cfg.seed)
     wcs = _make_wcs(cfg)
@@ -113,7 +115,27 @@ def generate(cfg: SyntheticConfig, outdir: str):
         img = rng.poisson(np.clip(img, 0, None)).astype(float)
         img += rng.normal(0.0, cfg.read_noise, img.shape)
 
-        hdr = wcs.to_header()
+        # Cosmic-ray streaks: sharp, elongated, at random positions per frame.
+        for _ in range(cfg.n_cosmic_rays):
+            cx = rng.integers(10, cfg.size - 10)
+            cy = rng.integers(10, cfg.size - 10)
+            length = rng.integers(3, 6)
+            ang = rng.uniform(0, np.pi)
+            for step in range(length):
+                px = int(cx + step * np.cos(ang))
+                py = int(cy + step * np.sin(ang))
+                if 0 <= px < cfg.size and 0 <= py < cfg.size:
+                    img[py, px] += cfg.cosmic_ray_flux * (1.0 - 0.1 * step)
+
+        if strip_wcs:
+            from astropy.io.fits import Header
+
+            hdr = Header()
+            # Keep a coarse pointing hint (as a real telescope header would).
+            hdr["RA"] = cfg.center_ra
+            hdr["DEC"] = cfg.center_dec
+        else:
+            hdr = wcs.to_header()
         hdr["DATE-OBS"] = t.isot
         hdr["EXPTIME"] = 60.0
         hdr["OBJECT"] = "synthetic_field"

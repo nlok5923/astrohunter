@@ -17,14 +17,25 @@ the detection, leaving the human to *vet* ranked candidates rather than hunt.
 
 ## Pipeline
 ```
-ingest FITS → extract sources (photutils) → LSPC astrometric solution
-→ static-source suppression → tracklet linking → known-object match (SkyBoT)
-→ ADES (PSV) + legacy obs80 report
+ingest FITS → [plate-solve if no WCS] → extract sources (photutils)
+→ real-bogus vetting → LSPC astrometric solution → static-source suppression
+→ tracklet linking → known-object match (SkyBoT)
+→ ADES XML + ADES PSV + legacy obs80  +  HTML blink-review
 ```
-The astrometric step is a **proper least-squares plate-constants (LSPC)** fit
-against a Gaia DR3 reference (the MPC mandates LSPC and forbids by-eye
-positions). The fit RMS is the sub-arcsecond *consistency* the MPC actually
-grades on.
+- **Plate-solving** — frames without a WCS are solved automatically via
+  asterism (triangle-invariant) matching against the reference catalogue, given
+  a coarse pointing hint (`--hint-ra/--hint-dec`). Or solve standalone:
+  `astrohunt solve raw.fits --hint-ra … --hint-dec …`.
+- **LSPC astrometry** — a *proper least-squares plate-constants* fit against
+  Gaia DR3 (the MPC mandates LSPC and forbids by-eye positions). The fit RMS is
+  the sub-arcsecond *consistency* the MPC actually grades on.
+- **Real-bogus vetting** — a CPU-only morphological classifier drops cosmic
+  rays, hot pixels, and trails before they form false tracklets (the GPU-free
+  precursor to a Phase-2 CNN).
+- **Reports** — ADES XML + PSV (the MPC-preferred formats) and legacy obs80,
+  with an offline structural **validator** that catches acceptance blockers.
+- **Visual review** — a self-contained HTML page with a **blink GIF** per
+  candidate (the mover walks across a fixed starfield) for fast human vetting.
 
 ## Install (Apple Silicon / macOS)
 ```bash
@@ -44,17 +55,28 @@ astrohunt demo
 
 Run on your own frames:
 ```bash
-# online (fetches Gaia DR3 + SkyBoT automatically)
+# online (fetches Gaia DR3 + SkyBoT automatically); writes all report formats + review
 astrohunt detect frame_00.fits frame_01.fits frame_02.fits frame_03.fits \
-    --obscode XXX --observer "Your Name" --out-ades report.psv
+    --obscode XXX --observer "Your Name" \
+    --out-ades report.psv --out-ades-xml report.xml --out-html review.html
+
+# raw frames without a WCS — give a coarse pointing hint to auto plate-solve
+astrohunt detect *.fits --hint-ra 187.5 --hint-dec 12.0 --out-html review.html
 
 # fully offline with a local reference catalogue
 astrohunt detect *.fits --offline --ref-catalog truth.json --out-ades report.psv
 ```
 
-Generate test data only:
+Plate-solve a single raw frame (writes the WCS into the header):
 ```bash
-astrohunt synth -o data/synthetic
+astrohunt solve raw.fits -o solved.fits --hint-ra 187.5 --hint-dec 12.0
+```
+
+Generate test data (optionally headerless or with artifacts):
+```bash
+astrohunt synth -o data/synthetic                       # clean, with WCS
+astrohunt synth -o data/raw --no-wcs                     # to exercise plate-solving
+astrohunt synth -o data/cr  --cosmic-rays 10             # to exercise vetting
 ```
 
 ## Tests
@@ -64,10 +86,14 @@ pytest -q
 ```
 
 ## Status & roadmap
-- **Phase 1 (this MVP):** deterministic core — ingest → LSPC → tracklets →
-  ADES, validated on synthetic data. ✅
-- **Phase 2:** CNN real-bogus vetting, ranked-candidate review UI, plate-solving
-  for headerless FITS (astrometry.net), submit.xsd validation.
+- **Phase 1 — deterministic core:** ingest → LSPC → tracklets → ADES, validated
+  on synthetic data. ✅
+- **Phase 1.5 — robustness & UX:** asterism plate-solving for headerless FITS,
+  morphological real-bogus vetting, ADES XML + PSV validation, and an HTML
+  blink-review UI. ✅
+- **Phase 2:** upgrade the rule-based vetter to a trained **CNN** real-bogus
+  classifier (bootstrap labels via SkyBoT/truth — scaffolding in `vet.py`),
+  strict `submit.xsd` validation, and a browser-based review app.
 - **Phase 3 (optional):** shift-and-stack / synthetic tracking for faint movers
   (modest gains on 4-frame sets — see RESEARCH.md).
 

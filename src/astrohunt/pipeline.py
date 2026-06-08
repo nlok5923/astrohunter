@@ -6,8 +6,9 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from . import astrometry, catalog, detect, extract
-from .ades import ObsMetadata, write_ades_psv, write_obs80
+from . import astrometry, catalog, detect, extract, platesolve
+from . import vet as vetting
+from .ades import ObsMetadata, write_ades_psv, write_ades_xml, write_obs80
 from .io import FrameSet, load_frame_set
 
 
@@ -18,6 +19,7 @@ class FrameReport:
     n_matched: int
     rms_arcsec: float
     mag_zeropoint: float
+    n_vetoed: int = 0
 
 
 @dataclass
@@ -27,7 +29,9 @@ class PipelineResult:
     n_candidates: int
     n_known: int
     ades_path: str | None = None
+    ades_xml_path: str | None = None
     obs80_path: str | None = None
+    html_path: str | None = None
     warnings: list[str] = field(default_factory=list)
 
     @property
@@ -48,9 +52,13 @@ def run_pipeline(
     link_tol_arcsec: float = 2.5,
     max_rate_arcsec_min: float = 25.0,
     min_points: int = 3,
+    vet: bool = True,
     use_online: bool = True,
+    hint_radec: tuple[float, float] | None = None,
     out_ades: str | None = None,
+    out_ades_xml: str | None = None,
     out_obs80: str | None = None,
+    out_html: str | None = None,
 ) -> PipelineResult:
     """Run the full detect-and-report pipeline over a set of FITS frames.
 
@@ -60,13 +68,26 @@ def run_pipeline(
     obs_meta = obs_meta or ObsMetadata()
     warns: list[str] = []
 
-    fset: FrameSet = load_frame_set(frame_paths)
-    center_ra, center_dec = fset.center_radec
+    fset: FrameSet = load_frame_set(frame_paths, allow_no_wcs=True)
+
+    have_wcs = fset.frames[0].wcs is not None
+    if have_wcs:
+        center_ra, center_dec = fset.center_radec
+    elif hint_radec is not None:
+        center_ra, center_dec = hint_radec
+    else:
+        raise ValueError(
+            "Frames have no WCS and no pointing hint was given. Pass "
+            "hint_radec=(ra, dec) so astrohunt can plate-solve them."
+        )
 
     # --- reference catalogue for astrometric calibration -------------------
     refcat = reference_catalog
     if refcat is None and use_online:
-        radius = max(8.0, fset.pixel_scale_arcsec * max(fset.frames[0].shape) / 60.0)
+        if have_wcs:
+            radius = max(8.0, fset.pixel_scale_arcsec * max(fset.frames[0].shape) / 60.0)
+        else:
+            radius = 20.0
         refcat = catalog.gaia_cone(center_ra, center_dec, radius_arcmin=radius)
         if refcat is None:
             warns.append("No reference catalogue (Gaia offline and none supplied).")
@@ -76,13 +97,39 @@ def run_pipeline(
             "(reference_catalog=...) or enable online Gaia access."
         )
 
-    # --- per-frame extraction + astrometric solution -----------------------
+    # --- extract sources once per frame ------------------------------------
+    srcs_per_frame = [
+        extract.extract_sources(f.data, fwhm=fwhm, threshold_sigma=threshold_sigma)
+        for f in fset
+    ]
+
+    # --- real-bogus vetting: drop artifacts before they form tracklets ------
+    n_vetoed = [0] * len(fset)
+    if vet:
+        cleaned = []
+        for i, (f, srcs) in enumerate(zip(fset, srcs_per_frame)):
+            mask, _stats = vetting.vet_sources(f.data, srcs)
+            n_vetoed[i] = int((~mask).sum())
+            cleaned.append(srcs[mask])
+        srcs_per_frame = cleaned
+
+    # --- plate-solve any frame lacking a WCS -------------------------------
+    for frame, srcs in zip(fset, srcs_per_frame):
+        if frame.wcs is None:
+            sr = platesolve.solve_wcs(
+                srcs["x"], srcs["y"], refcat.ra, refcat.dec,
+                center_ra, center_dec, ref_mag=refcat.mag,
+            )
+            frame.wcs = sr.wcs
+            warns.append(
+                f"frame {frame.index}: plate-solved "
+                f"({sr.n_inliers} inliers, {sr.rms_arcsec:.2f}\" rms)."
+            )
+
+    # --- per-frame astrometric solution ------------------------------------
     frame_reports = []
     detections_per_frame: list[list[detect.Detection]] = []
-    for frame in fset:
-        srcs = extract.extract_sources(
-            frame.data, fwhm=fwhm, threshold_sigma=threshold_sigma
-        )
+    for frame, srcs in zip(fset, srcs_per_frame):
         sol, n_matched = astrometry.solve_frame(
             srcs, frame.wcs, refcat.ra, refcat.dec, cat_mag=refcat.mag,
             order=plate_order,
@@ -102,7 +149,8 @@ def run_pipeline(
         ]
         detections_per_frame.append(dets)
         frame_reports.append(
-            FrameReport(frame.index, len(srcs), n_matched, sol.rms_arcsec, sol.mag_zeropoint)
+            FrameReport(frame.index, len(srcs), n_matched, sol.rms_arcsec,
+                        sol.mag_zeropoint, n_vetoed[frame.index])
         )
 
     # --- moving-object detection ------------------------------------------
@@ -129,11 +177,19 @@ def run_pipeline(
     n_candidates = len(candidates)
 
     # --- reporting (new candidates only) ----------------------------------
-    ades_path = obs80_path = None
+    ades_path = ades_xml_path = obs80_path = None
     if out_ades and candidates:
         ades_path = write_ades_psv(candidates, obs_meta, out_ades)
+    if out_ades_xml and candidates:
+        ades_xml_path = write_ades_xml(candidates, obs_meta, out_ades_xml)
     if out_obs80 and candidates:
         obs80_path = write_obs80(candidates, obs_meta, out_obs80)
+
+    html_path = None
+    if out_html and tracklets:
+        from . import review
+
+        html_path = review.write_html_report(fset.frames, tracklets, out_html)
 
     return PipelineResult(
         frame_reports=frame_reports,
@@ -141,6 +197,8 @@ def run_pipeline(
         n_candidates=n_candidates,
         n_known=n_known,
         ades_path=ades_path,
+        ades_xml_path=ades_xml_path,
         obs80_path=obs80_path,
+        html_path=html_path,
         warnings=warns,
     )

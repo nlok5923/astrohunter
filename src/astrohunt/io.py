@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 from astropy.io import fits
 from astropy.time import Time, TimeDelta
-from astropy.wcs import WCS
+from astropy.wcs import WCS, FITSFixedWarning
 
 
 @dataclass
@@ -82,7 +83,8 @@ def _read_time(header: fits.Header) -> Time:
     raise ValueError("No usable observation-time keyword (DATE-OBS/MJD-OBS) in header.")
 
 
-def load_frame(path: str | Path, index: int = 0, hdu: int = 0) -> Frame:
+def load_frame(path: str | Path, index: int = 0, hdu: int = 0,
+               allow_no_wcs: bool = False) -> Frame:
     path = str(path)
     with fits.open(path) as hdul:
         h = hdul[hdu]
@@ -94,27 +96,34 @@ def load_frame(path: str | Path, index: int = 0, hdu: int = 0) -> Frame:
                     break
         data = np.asarray(h.data, dtype=float)
         header = h.header
-        wcs = WCS(header)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", FITSFixedWarning)
+            wcs = WCS(header)
         if not wcs.has_celestial:
-            raise ValueError(
-                f"{path}: no celestial WCS in header. astrohunt needs a plate "
-                f"solution (run a plate-solver first, or use synthetic data)."
-            )
+            if not allow_no_wcs:
+                raise ValueError(
+                    f"{path}: no celestial WCS in header. Plate-solve first "
+                    f"(astrohunt solve / --hint-ra/--hint-dec) or use synthetic data."
+                )
+            wcs = None
+        else:
+            wcs = wcs.celestial
         time = _read_time(header)
         exptime = float(header.get("EXPTIME", header.get("EXPOSURE", 0.0)) or 0.0)
     return Frame(
         index=index,
         path=path,
         data=data,
-        wcs=wcs.celestial,
+        wcs=wcs,
         time=time,
         exptime=exptime,
         header=header,
     )
 
 
-def load_frame_set(paths) -> FrameSet:
-    frames = [load_frame(p, index=i) for i, p in enumerate(paths)]
+def load_frame_set(paths, allow_no_wcs: bool = False) -> FrameSet:
+    frames = [load_frame(p, index=i, allow_no_wcs=allow_no_wcs)
+              for i, p in enumerate(paths)]
     # Order by time so "frame 0" is genuinely the earliest exposure.
     frames.sort(key=lambda f: f.mjd)
     for i, f in enumerate(frames):

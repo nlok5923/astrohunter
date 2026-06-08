@@ -16,10 +16,12 @@ dependencies = [
     "astropy",
     "photutils",
     "astroquery",
+    "pillow",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest"]
+ml = ["scikit-learn"]       # optional learned real-bogus vetter (rule-based works without)
 
 [project.scripts]
 astrohunt = "astrohunt.cli:main"
