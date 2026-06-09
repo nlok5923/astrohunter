@@ -86,6 +86,8 @@ def cmd_detect(args):
         use_online=not args.offline,
         plate_order=args.order,
         vet=not args.no_vet,
+        vetter=args.vetter,
+        vet_model=args.vet_model,
         hint_radec=hint,
         out_ades=args.out_ades,
         out_ades_xml=args.out_ades_xml,
@@ -97,6 +99,40 @@ def cmd_detect(args):
         from .validate import validate_psv_file
 
         print("\n" + validate_psv_file(args.out_ades).report())
+    if args.out_ades_xml:
+        from .validate import validate_xsd_file
+
+        r = validate_xsd_file(args.out_ades_xml)
+        print(f"\nStrict submit.xsd validation: {'PASS' if r.ok else 'FAIL'}")
+        for e in r.errors[:8]:
+            print(f"  [error] {e}")
+        for w in r.warnings[:4]:
+            print(f"  [warn]  {w}")
+
+
+def cmd_train_vetter(args):
+    import numpy as np
+
+    from .mlvet import RealBogusModel, build_dataset
+
+    print(f"Building auto-labeled dataset ({args.sets} sets, "
+          f"{args.cosmic_rays} cosmic rays/frame)...")
+    X, y = build_dataset(n_sets=args.sets, n_cosmic_rays=args.cosmic_rays)
+    rng = np.random.default_rng(0)
+    p = rng.permutation(len(X))
+    X, y = X[p], y[p]
+    ntr = int(0.8 * len(X))
+
+    model = RealBogusModel(backend=args.backend).fit(X[:ntr], y[:ntr])
+    pred = (model.predict_proba(X[ntr:]) >= 0.5).astype(int)
+    acc = (pred == y[ntr:]).mean()
+    bog = y[ntr:] == 0
+    rej = (pred[bog] == 0).mean() if bog.sum() else float("nan")
+    print(f"dataset={len(X)} ({int(y.sum())} real / {int((1 - y).sum())} bogus)  "
+          f"backend={args.backend}")
+    print(f"holdout: accuracy={acc:.3f}  artifact-rejection={rej:.3f}")
+    model.save(args.output)
+    print(f"model saved: {args.output}")
 
 
 def cmd_solve(args):
@@ -121,6 +157,39 @@ def cmd_solve(args):
     print(f"Plate-solved {args.frame}: {res.n_inliers} inliers, "
           f"{res.rms_arcsec:.3f}\" rms ({len(res.matched_det)} stars).")
     print(f"WCS written to: {out_path}")
+
+
+def cmd_stack(args):
+    import numpy as np
+
+    from .extract import extract_sources
+    from .io import load_frame_set
+    from .stack import digital_tracking, peak_snr_at, shift_and_stack
+
+    fset = load_frame_set(args.frames)
+    if args.grid:
+        rates = np.arange(args.rate_min, args.rate_max + 1e-9, args.rate_step)
+        pas = np.arange(0.0, 180.0, args.pa_step)
+        hits = digital_tracking(fset.frames, rates, pas, threshold_sigma=args.threshold)
+        print(f"Digital tracking: {len(rates)}x{len(pas)} (rate,PA) hypotheses "
+              f"-> {len(hits)} unique hits")
+        for h in hits[:args.top]:
+            print(f"  SNR={h.snr:5.1f}  rate={h.rate:.2f}\"/min  PA={h.pa:3.0f}deg  "
+                  f"RA/Dec={h.ra:.5f},{h.dec:+.5f}")
+    else:
+        stack, _t0 = shift_and_stack(fset.frames, args.rate, args.pa)
+        srcs = extract_sources(stack, fwhm=3.5, threshold_sigma=args.threshold)
+        print(f"Stacked {len(fset)} frames at rate={args.rate}\"/min PA={args.pa}deg "
+              f"(static-subtracted); {len(srcs)} source(s):")
+        for i in range(len(srcs)):
+            x, y = float(srcs["x"][i]), float(srcs["y"][i])
+            ra, dec = fset.frames[0].wcs.all_pix2world(x, y, 0)
+            print(f"  SNR~{peak_snr_at(stack, x, y):5.1f}  RA/Dec={float(ra):.5f},{float(dec):+.5f}")
+        if args.save_fits:
+            from astropy.io import fits
+
+            fits.writeto(args.save_fits, stack.astype("float32"), overwrite=True)
+            print(f"stack saved: {args.save_fits}")
 
 
 def cmd_demo(args):
@@ -203,6 +272,9 @@ def build_parser():
     d.add_argument("--offline", action="store_true", help="no network (Gaia/SkyBoT)")
     d.add_argument("--order", type=int, default=1, help="plate-constant polynomial order")
     d.add_argument("--no-vet", action="store_true", help="disable real-bogus artifact vetting")
+    d.add_argument("--vetter", choices=["rule", "ml"], default="rule",
+                   help="vetting backend: morphological rules or a learned model")
+    d.add_argument("--vet-model", help="path to a trained vetter model (for --vetter ml)")
     d.add_argument("--obscode", default="XXX", help="MPC observatory code")
     d.add_argument("--observer", default="Unknown")
     d.add_argument("--band", default="G")
@@ -222,6 +294,28 @@ def build_parser():
     sv.add_argument("--hint-dec", type=float, help="pointing hint Dec (deg)")
     sv.add_argument("--radius", type=float, default=20.0, help="Gaia query radius (arcmin)")
     sv.set_defaults(func=cmd_solve)
+
+    st = sub.add_parser("stack", help="shift-and-stack / digital tracking for faint movers")
+    st.add_argument("frames", nargs="+", help="FITS frames (must have a WCS)")
+    st.add_argument("--rate", type=float, default=1.0, help="trial rate (arcsec/min)")
+    st.add_argument("--pa", type=float, default=0.0, help="trial position angle (deg)")
+    st.add_argument("--grid", action="store_true", help="sweep a (rate, PA) grid")
+    st.add_argument("--rate-min", type=float, default=0.5)
+    st.add_argument("--rate-max", type=float, default=3.0)
+    st.add_argument("--rate-step", type=float, default=0.25)
+    st.add_argument("--pa-step", type=float, default=15.0)
+    st.add_argument("--threshold", type=float, default=5.0, help="detection sigma")
+    st.add_argument("--top", type=int, default=12, help="hits to print (grid mode)")
+    st.add_argument("--save-fits", help="save the stacked image to this FITS path")
+    st.set_defaults(func=cmd_stack)
+
+    tv = sub.add_parser("train-vetter", help="train a learned real-bogus vetter")
+    tv.add_argument("-o", "--output", default="vetter.pkl", help="model output path")
+    tv.add_argument("--backend", choices=["mlp", "cnn"], default="mlp",
+                    help="mlp = NumPy (no deps); cnn = PyTorch (if installed)")
+    tv.add_argument("--sets", type=int, default=6, help="synthetic sets to generate")
+    tv.add_argument("--cosmic-rays", type=int, default=25, help="artifacts/frame for labels")
+    tv.set_defaults(func=cmd_train_vetter)
 
     m = sub.add_parser("demo", help="generate synthetic data + run pipeline (offline)")
     m.add_argument("-o", "--outdir", default="data/demo")

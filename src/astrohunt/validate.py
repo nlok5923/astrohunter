@@ -9,10 +9,14 @@ placeholder observatory codes. This is a fast, dependency-free pre-flight check.
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass, field
 
 from astropy.time import Time
+
+# Vendored official IAU ADES submission schema.
+SCHEMA_PATH = os.path.join(os.path.dirname(__file__), "schemas", "submit.xsd")
 
 # Subset of ADES controlled vocabularies relevant to optical CCD astrometry.
 _VALID_MODES = {"CCD", "CMO", "VID", "PHO", "ENC", "PMT", "MIC", "MER", "TDI", "OCC", "UNK"}
@@ -142,20 +146,31 @@ def validate_psv_file(path: str) -> ValidationResult:
         return validate_psv_text(f.read())
 
 
-def validate_xsd(xml_text: str, xsd_path: str) -> ValidationResult:
-    """Optional strict validation against a vendored submit.xsd (needs lxml)."""
+def validate_xsd(xml_text: str, xsd_path: str = SCHEMA_PATH) -> ValidationResult:
+    """Strict validation of ADES XML against the official submit.xsd (needs lxml).
+
+    This is the same schema the MPC validates against server-side, so passing it
+    is a strong guarantee the XML is structurally acceptable.
+    """
     try:
         from lxml import etree
     except Exception:
         return ValidationResult(
             False, [], ["lxml not installed; skipped strict submit.xsd validation."], 0
         )
+    if not os.path.exists(xsd_path):
+        return ValidationResult(False, [f"schema not found at {xsd_path}."], [], 0)
     try:
         schema = etree.XMLSchema(etree.parse(xsd_path))
         doc = etree.fromstring(xml_text.encode())
         if schema.validate(doc):
             return ValidationResult(True, [], [], 0)
-        errs = [str(e.message) for e in schema.error_log]
+        errs = [f"line {e.line}: {e.message}" for e in schema.error_log]
         return ValidationResult(False, errs, [], 0)
     except Exception as e:  # noqa: BLE001
         return ValidationResult(False, [f"XSD validation error: {e}"], [], 0)
+
+
+def validate_xsd_file(xml_path: str, xsd_path: str = SCHEMA_PATH) -> ValidationResult:
+    with open(xml_path) as f:
+        return validate_xsd(f.read(), xsd_path)

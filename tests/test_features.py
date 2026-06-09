@@ -76,6 +76,23 @@ def test_ades_validation_catches_errors():
     assert any("ra=" in e or "range" in e for e in r.errors)
 
 
+def test_strict_xsd_validation_passes():
+    import pytest
+
+    pytest.importorskip("lxml")
+    from astrohunt.ades import ObsMetadata, build_ades_xml
+    from astrohunt.detect import Detection, Tracklet
+    from astrohunt.validate import validate_xsd
+
+    dets = [Detection(frame=i, time_mjd=61199.4 + i * 0.01, x=100, y=100,
+                      ra=187.5 + i * 0.001, dec=12.0 + i * 0.001, mag=19.5, flux=1e3)
+            for i in range(4)]
+    trk = Tracklet(detections=dets, rate_total=1.6, rms_arcsec=0.3, pa_deg=55)
+    meta = ObsMetadata(obs_code="568", observer="J Doe", measurer="J Doe", submitter="J Doe")
+    r = validate_xsd(build_ades_xml([trk], meta))
+    assert r.ok, r.errors
+
+
 def test_ades_validation_flags_placeholder_obscode():
     psv = ("# version=2017\n"
            "trkSub|mode|stn|obsTime|ra|dec\n"
@@ -118,5 +135,9 @@ def test_html_review_written(tmp_path):
     )
     assert result.html_path
     text = open(html).read()
-    assert "data:image/gif;base64" in text   # blink animation embedded
+    assert "data:image/gif;base64" in text     # blink animation embedded
     assert "NEW CANDIDATE" in text
+    # interactive app: accept/reject + ADES export wired in
+    assert "exportAccepted" in text
+    assert "function buildPSV" in text
+    assert "localStorage" in text

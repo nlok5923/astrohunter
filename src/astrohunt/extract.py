@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 from astropy.stats import sigma_clipped_stats
 from astropy.table import Table
 from photutils.centroids import centroid_com, centroid_sources
 from photutils.detection import DAOStarFinder
+
+try:
+    from photutils.utils.exceptions import NoDetectionsWarning
+except Exception:  # pragma: no cover
+    NoDetectionsWarning = Warning
 
 
 def extract_sources(
@@ -27,7 +34,9 @@ def extract_sources(
         std = float(np.std(data)) or 1.0
 
     finder = DAOStarFinder(fwhm=fwhm, threshold=threshold_sigma * std)
-    tbl = finder(data - median)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", NoDetectionsWarning)
+        tbl = finder(data - median)
     if tbl is None or len(tbl) == 0:
         return Table(
             names=["id", "x", "y", "flux", "peak", "mag_inst", "snr"],

@@ -56,7 +56,7 @@ def test_pipeline_recovers_asteroid(synthetic_set, tmp_path):
     # An ADES report should have been written with the expected header.
     with open(ades) as f:
         text = f.read()
-    assert "# version=2017" in text
+    assert "# version=2022" in text
     assert "trkSub|mode|stn|obsTime|ra|dec" in text
 
 

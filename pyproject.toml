@@ -17,17 +17,21 @@ dependencies = [
     "photutils",
     "astroquery",
     "pillow",
+    "lxml",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest"]
-ml = ["scikit-learn"]       # optional learned real-bogus vetter (rule-based works without)
+cnn = ["torch"]             # optional PyTorch CNN real-bogus backend (NumPy MLP is default)
 
 [project.scripts]
 astrohunt = "astrohunt.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+astrohunt = ["schemas/*.xsd"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

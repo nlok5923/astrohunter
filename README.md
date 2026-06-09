@@ -29,13 +29,20 @@ ingest FITS → [plate-solve if no WCS] → extract sources (photutils)
 - **LSPC astrometry** — a *proper least-squares plate-constants* fit against
   Gaia DR3 (the MPC mandates LSPC and forbids by-eye positions). The fit RMS is
   the sub-arcsecond *consistency* the MPC actually grades on.
-- **Real-bogus vetting** — a CPU-only morphological classifier drops cosmic
-  rays, hot pixels, and trails before they form false tracklets (the GPU-free
-  precursor to a Phase-2 CNN).
+- **Real-bogus vetting** — drops cosmic rays, hot pixels, and trails before they
+  form false tracklets. Two backends: CPU-only morphological **rules** (default)
+  or a **learned model** (`--vetter ml`) — a from-scratch NumPy MLP or an
+  optional PyTorch CNN, trained on cutouts auto-labelled against the catalogue
+  (`astrohunt train-vetter`, ~98% accuracy on synthetic data).
 - **Reports** — ADES XML + PSV (the MPC-preferred formats) and legacy obs80,
-  with an offline structural **validator** that catches acceptance blockers.
-- **Visual review** — a self-contained HTML page with a **blink GIF** per
-  candidate (the mover walks across a fixed starfield) for fast human vetting.
+  with an offline structural validator **and strict validation against the
+  official IAU `submit.xsd`** (the same schema the MPC enforces).
+- **Visual review** — a self-contained **interactive HTML app**: per-candidate
+  blink GIF, accept/reject (mouse or keyboard, persisted), and **export-accepted
+  → ADES PSV** straight from the browser. No server.
+- **Shift-and-stack** (`astrohunt stack`) — digital tracking that co-adds frames
+  along a velocity hypothesis to pull out movers below the single-frame
+  threshold (~√N SNR gain), with a (rate, PA) grid search.
 
 ## Install (Apple Silicon / macOS)
 ```bash
@@ -72,6 +79,17 @@ Plate-solve a single raw frame (writes the WCS into the header):
 astrohunt solve raw.fits -o solved.fits --hint-ra 187.5 --hint-dec 12.0
 ```
 
+Train and use a learned real-bogus vetter:
+```bash
+astrohunt train-vetter -o vetter.pkl --backend mlp        # or --backend cnn (PyTorch)
+astrohunt detect *.fits --vetter ml --vet-model vetter.pkl --out-html review.html
+```
+
+Hunt for a faint mover with shift-and-stack (digital tracking):
+```bash
+astrohunt stack *.fits --grid --rate-min 0.5 --rate-max 3 --pa-step 15 --threshold 6
+```
+
 Generate test data (optionally headerless or with artifacts):
 ```bash
 astrohunt synth -o data/synthetic                       # clean, with WCS
@@ -91,11 +109,15 @@ pytest -q
 - **Phase 1.5 — robustness & UX:** asterism plate-solving for headerless FITS,
   morphological real-bogus vetting, ADES XML + PSV validation, and an HTML
   blink-review UI. ✅
-- **Phase 2:** upgrade the rule-based vetter to a trained **CNN** real-bogus
-  classifier (bootstrap labels via SkyBoT/truth — scaffolding in `vet.py`),
-  strict `submit.xsd` validation, and a browser-based review app.
-- **Phase 3 (optional):** shift-and-stack / synthetic tracking for faint movers
-  (modest gains on 4-frame sets — see RESEARCH.md).
+- **Phase 2 — smarts & rigor:** learned real-bogus vetter (NumPy MLP + optional
+  PyTorch CNN, auto-labelled training), strict `submit.xsd` validation, and an
+  interactive browser review app with accept/reject + ADES export. ✅
+- **Phase 3 — faint movers:** shift-and-stack / digital tracking with a (rate,
+  PA) grid search (~√N gain — modest on 4-frame sets, as RESEARCH.md predicted). ✅
+- **Next — the real-world milestone:** validate the whole pipeline on **real
+  Pan-STARRS / MAST FITS** (messy PSFs, real bad pixels, registration error), and
+  resolve whether a non-Astrometrica tool can be credited inside official IASC
+  campaigns.
 
 ⚠️ `astrohunt` produces reports for a human to review; it does **not** submit to
 the MPC. The `XXX` observatory code is a placeholder — real submissions require

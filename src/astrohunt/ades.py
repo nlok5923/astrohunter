@@ -19,6 +19,9 @@ from astropy.coordinates import Angle
 from astropy.time import Time
 import astropy.units as u
 
+# The current IAU ADES submission schema (submit.xsd) requires version "2022".
+ADES_VERSION = "2022"
+
 
 @dataclass
 class ObsMetadata:
@@ -26,7 +29,7 @@ class ObsMetadata:
     observer: str = "Unknown"
     measurer: str = "Unknown"
     telescope_design: str = "reflector"
-    aperture_m: float = 0.0
+    aperture_m: float = 0.5        # metres; required by ADES — set your real aperture
     detector: str = "CCD"
     ast_cat: str = "Gaia3"         # astrometric reference catalogue (ADES code)
     band: str = "G"
@@ -39,6 +42,7 @@ _ADES_COLUMNS = [
     "trkSub", "mode", "stn", "obsTime", "ra", "dec",
     "rmsRA", "rmsDec", "mag", "band", "astCat", "remarks",
 ]
+ADES_COLUMNS = _ADES_COLUMNS   # public alias
 
 
 def _iso_utc(mjd: float) -> str:
@@ -79,36 +83,40 @@ def tracklet_to_ades_rows(tracklet, meta: ObsMetadata, index: int):
     return rows
 
 
-def write_ades_psv(tracklets, meta: ObsMetadata, path: str) -> str:
-    """Write an ADES PSV file for all (candidate) tracklets. Returns the path."""
-    lines = []
-    # Header metadata blocks (# = block, ! = key/value).
-    lines.append("# version=2017")
-    lines.append("# observatory")
-    lines.append(f"! mpcCode {meta.obs_code}")
-    lines.append("# submitter")
-    lines.append(f"! name {meta.submitter}")
-    lines.append("# observers")
-    lines.append(f"! name {meta.observer}")
-    lines.append("# measurers")
-    lines.append(f"! name {meta.measurer}")
-    lines.append("# telescope")
-    lines.append(f"! design {meta.telescope_design}")
-    if meta.aperture_m:
-        lines.append(f"! aperture {meta.aperture_m}")
-    lines.append(f"! detector {meta.detector}")
+def ades_metadata_lines(meta: ObsMetadata) -> list[str]:
+    """The PSV header block (# blocks / ! key-values)."""
+    return [
+        f"# version={ADES_VERSION}",
+        "# observatory",
+        f"! mpcCode {meta.obs_code}",
+        "# submitter",
+        f"! name {meta.submitter}",
+        "# observers",
+        f"! name {meta.observer}",
+        "# measurers",
+        f"! name {meta.measurer}",
+        "# telescope",
+        f"! design {meta.telescope_design}",
+        f"! aperture {meta.aperture_m or 0.5}",
+        f"! detector {meta.detector}",
+    ]
 
-    # PSV data header + rows.
+
+def ades_psv_text(tracklets, meta: ObsMetadata) -> str:
+    lines = list(ades_metadata_lines(meta))
     lines.append("|".join(_ADES_COLUMNS))
     idx = 1
     for trk in tracklets:
         for row in tracklet_to_ades_rows(trk, meta, idx):
             lines.append("|".join(str(row[c]) for c in _ADES_COLUMNS))
         idx += 1
+    return "\n".join(lines) + "\n"
 
-    text = "\n".join(lines) + "\n"
+
+def write_ades_psv(tracklets, meta: ObsMetadata, path: str) -> str:
+    """Write an ADES PSV file for all (candidate) tracklets. Returns the path."""
     with open(path, "w") as f:
-        f.write(text)
+        f.write(ades_psv_text(tracklets, meta))
     return path
 
 
@@ -173,7 +181,7 @@ def _sub(parent, tag, text):
 
 def build_ades_xml(tracklets, meta: ObsMetadata) -> str:
     """Build an ADES XML document string (preference order XML > PSV > obs80)."""
-    ades = ET.Element("ades", {"version": "2017"})
+    ades = ET.Element("ades", {"version": ADES_VERSION})
     block = ET.SubElement(ades, "obsBlock")
 
     ctx = ET.SubElement(block, "obsContext")
@@ -184,8 +192,7 @@ def build_ades_xml(tracklets, meta: ObsMetadata) -> str:
     _sub(ET.SubElement(ctx, "measurers"), "name", meta.measurer)
     tel = ET.SubElement(ctx, "telescope")
     _sub(tel, "design", meta.telescope_design)
-    if meta.aperture_m:
-        _sub(tel, "aperture", meta.aperture_m)
+    _sub(tel, "aperture", meta.aperture_m or 0.5)   # required, positive
     _sub(tel, "detector", meta.detector)
 
     data = ET.SubElement(block, "obsData")

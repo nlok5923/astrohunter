@@ -53,6 +53,8 @@ def run_pipeline(
     max_rate_arcsec_min: float = 25.0,
     min_points: int = 3,
     vet: bool = True,
+    vetter: str = "rule",
+    vet_model: str | None = None,
     use_online: bool = True,
     hint_radec: tuple[float, float] | None = None,
     out_ades: str | None = None,
@@ -106,9 +108,20 @@ def run_pipeline(
     # --- real-bogus vetting: drop artifacts before they form tracklets ------
     n_vetoed = [0] * len(fset)
     if vet:
+        ml_model = None
+        if vetter == "ml" and vet_model:
+            from .mlvet import RealBogusModel
+
+            ml_model = RealBogusModel.load(vet_model)
+            warns.append(f"using learned vetter ({ml_model.backend}) from {vet_model}.")
         cleaned = []
         for i, (f, srcs) in enumerate(zip(fset, srcs_per_frame)):
-            mask, _stats = vetting.vet_sources(f.data, srcs)
+            if ml_model is not None:
+                from .mlvet import predict_mask
+
+                mask = predict_mask(ml_model, f.data, srcs)
+            else:
+                mask, _stats = vetting.vet_sources(f.data, srcs)
             n_vetoed[i] = int((~mask).sum())
             cleaned.append(srcs[mask])
         srcs_per_frame = cleaned
@@ -189,7 +202,7 @@ def run_pipeline(
     if out_html and tracklets:
         from . import review
 
-        html_path = review.write_html_report(fset.frames, tracklets, out_html)
+        html_path = review.write_html_report(fset.frames, tracklets, out_html, meta=obs_meta)
 
     return PipelineResult(
         frame_reports=frame_reports,
