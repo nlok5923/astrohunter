@@ -97,6 +97,17 @@ astrohunt synth -o data/raw --no-wcs                     # to exercise plate-sol
 astrohunt synth -o data/cr  --cosmic-rays 10             # to exercise vetting
 ```
 
+## Web UI
+A Next.js + FastAPI web app lives in [`web/`](web/) — upload FITS (or run the
+demo), then vet candidates and export ADES, all in the browser.
+```bash
+pip install -e ".[web]"
+astrohunt serve                 # backend → http://127.0.0.1:8000
+cd web && npm install && npm run dev   # frontend → http://localhost:3000
+```
+The frontend reuses the blink-review UX (accept/reject + keyboard + ADES export)
+backed by the live pipeline. Deployment guide (incl. Vercel): [`web/DEPLOY.md`](web/DEPLOY.md).
+
 ## Tests
 ```bash
 pip install -e ".[dev]"

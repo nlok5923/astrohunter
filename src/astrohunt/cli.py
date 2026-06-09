@@ -159,6 +159,14 @@ def cmd_solve(args):
     print(f"WCS written to: {out_path}")
 
 
+def cmd_serve(args):
+    import uvicorn
+
+    print(f"astrohunt web API on http://{args.host}:{args.port}  (try /api/demo)")
+    uvicorn.run("astrohunt.webapi:app", host=args.host, port=args.port,
+                reload=args.reload)
+
+
 def cmd_stack(args):
     import numpy as np
 
@@ -294,6 +302,12 @@ def build_parser():
     sv.add_argument("--hint-dec", type=float, help="pointing hint Dec (deg)")
     sv.add_argument("--radius", type=float, default=20.0, help="Gaia query radius (arcmin)")
     sv.set_defaults(func=cmd_solve)
+
+    srv = sub.add_parser("serve", help="run the web API backend (FastAPI/uvicorn)")
+    srv.add_argument("--host", default="127.0.0.1")
+    srv.add_argument("--port", type=int, default=8000)
+    srv.add_argument("--reload", action="store_true")
+    srv.set_defaults(func=cmd_serve)
 
     st = sub.add_parser("stack", help="shift-and-stack / digital tracking for faint movers")
     st.add_argument("frames", nargs="+", help="FITS frames (must have a WCS)")

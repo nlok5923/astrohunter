@@ -1,0 +1,5 @@
+# Vercel Python function dependencies. Installs the astrohunt package (from the
+# repo's pyproject.toml) plus the web extra (FastAPI/uvicorn/multipart).
+# Note: the optional PyTorch CNN vetter backend ([cnn]) is intentionally excluded
+# to keep the serverless bundle small — the default rule-based vetter needs no ML.
+.[web]
