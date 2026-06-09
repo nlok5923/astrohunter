@@ -1,5 +1,14 @@
-# Vercel Python function dependencies. Installs the astrohunt package (from the
-# repo's pyproject.toml) plus the web extra (FastAPI/uvicorn/multipart).
-# Note: the optional PyTorch CNN vetter backend ([cnn]) is intentionally excluded
-# to keep the serverless bundle small — the default rule-based vetter needs no ML.
-.[web]
+# Vercel Python function dependencies (LEAN — sized to fit serverless limits).
+#
+# This supports the synthetic demo (/api/demo) and OFFLINE detection fully.
+# astroquery (Gaia/SkyBoT) and lxml (strict submit.xsd) are intentionally omitted
+# to keep the bundle small — those code paths import lazily and degrade gracefully,
+# so online catalog lookups + strict-XSD validation are simply unavailable on this
+# deploy. For the full stack locally: `pip install -e ".[web]"`.
+numpy
+scipy
+astropy
+photutils
+pillow
+fastapi
+python-multipart

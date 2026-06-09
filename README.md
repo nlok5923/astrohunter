@@ -5,6 +5,10 @@ citizen-science asteroid detection (IASC-style). Give it a set of telescope
 images of the same field taken minutes apart; it finds the moving objects and
 produces an **MPC-ready ADES report** — no GPU, runs natively on Apple Silicon.
 
+> **🌐 Live demo:** https://web-zeta-bay-43.vercel.app — click **Run demo** to see
+> the real pipeline recover an injected asteroid (blink + accept/reject + ADES export).
+> Backend API: https://asteriod-naming.vercel.app/api/demo
+
 > Design grounding: see [`RESEARCH.md`](RESEARCH.md) (deep-research synthesis,
 > adversarially fact-checked). The MVP deliberately nails the *trusted,
 > deterministic core* first; ML real-bogus vetting and a review UI are Phase 2.

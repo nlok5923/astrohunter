@@ -1,51 +1,61 @@
 # Deploying astrohunt (web UI)
 
-The app is two pieces: a **Next.js frontend** (`web/`) and a **Python FastAPI
-backend** that runs the real `astrohunt` pipeline (`src/astrohunt/webapi.py`,
-exposed for Vercel at `api/index.py`).
+Two pieces: a **Next.js frontend** (`web/`) and a **Python FastAPI backend** that
+runs the real `astrohunt` pipeline. **Live now:**
 
-## Local development (verified)
+- Frontend: **https://web-zeta-bay-43.vercel.app**
+- Backend:  **https://asteriod-naming.vercel.app** (`/api/demo`, `/api/detect`, `/api/health`)
+
+## Local development
 ```bash
-# 1) backend — from the repo root, with the venv that has astrohunt + [web]
+# 1) backend — from the repo root
 pip install -e ".[web]"
-astrohunt serve                 # → http://127.0.0.1:8000  (try /api/demo)
+astrohunt serve                 # → http://127.0.0.1:8000
 
 # 2) frontend — in another terminal
-cd web
-npm install
-npm run dev                     # → http://localhost:3000
+cd web && npm install && npm run dev    # → http://localhost:3000
 ```
-Open http://localhost:3000, click **Run demo** (or upload FITS frames), vet the
-candidates, and **Export accepted → ADES PSV**. The frontend talks to the backend
-via `NEXT_PUBLIC_API_URL` (defaults to `http://127.0.0.1:8000`).
+The frontend calls same-origin `/api/*`; `next.config.ts` rewrites that to the
+backend (`NEXT_PUBLIC_API_URL`, default `http://127.0.0.1:8000`). So you don't set
+anything for local dev — just run both.
 
-## Vercel — two projects from this one repo (recommended)
-A single Vercel project can't cleanly host a Next.js app in `web/` *and* a Python
-function at the repo root, so deploy them as two linked projects:
+## How it's deployed on Vercel (two projects, one repo)
 
-**Backend project** (Root Directory = repo root)
-- Vercel installs `requirements.txt` (`.[web]` → astrohunt + FastAPI) and serves
-  `api/index.py`; `vercel.json` rewrites `/api/*` to that ASGI function.
-- Gives you e.g. `https://astrohunt-api.vercel.app/api/demo`.
+**Backend** — Vercel project rooted at the **repo root**:
+- `api/index.py` exposes the FastAPI ASGI `app`. The `astrohunt` package is
+  **vendored into `api/astrohunt/`** (synced from `src/astrohunt`, git-ignored) so
+  Vercel's FastAPI bundler includes it without pip-installing the heavy package.
+- `requirements.txt` is a **lean** set (numpy/scipy/astropy/photutils/pillow +
+  fastapi/python-multipart). `.vercelignore` excludes `pyproject.toml` so Vercel
+  installs from `requirements.txt` (not the package's full core deps). astroquery
+  + lxml are omitted, so the hosted backend supports the **synthetic demo and
+  offline detection**; online Gaia/SkyBoT and strict-XSD validation are local-only.
+- Deploy: `vercel deploy --prod` from the repo root. (Re-sync the vendored copy
+  first: `rm -rf api/astrohunt && cp -r src/astrohunt api/astrohunt`.)
 
-**Frontend project** (Root Directory = `web/`)
-- Auto-detected Next.js. Set env `NEXT_PUBLIC_API_URL` = the backend URL above.
-- Gives you the shareable UI URL.
+**Frontend** — Vercel project rooted at **`web/`**:
+- Set env `NEXT_PUBLIC_API_URL` = the backend URL. `next.config.ts` rewrites
+  `/api/*` → `${NEXT_PUBLIC_API_URL}/api/*` (server-side proxy — no CORS, no
+  client-side URL inlining).
+- Deploy: `cd web && vercel deploy --prod`.
 
 ```bash
-# from repo root — backend
-vercel --prod
-# from web/ — frontend (set NEXT_PUBLIC_API_URL in the dashboard or:)
-cd web && vercel --prod -e NEXT_PUBLIC_API_URL=https://astrohunt-api.vercel.app
+# backend (repo root)
+rm -rf api/astrohunt && cp -r src/astrohunt api/astrohunt
+vercel deploy --prod --yes
+# frontend (web/)
+cd web
+printf "https://<your-backend>.vercel.app" | vercel env add NEXT_PUBLIC_API_URL production
+vercel deploy --prod --yes
 ```
 
-> **Heads-up (not yet deploy-tested):** the backend bundles a heavy scientific
-> stack (numpy/scipy/astropy/photutils/astroquery/lxml/pillow). It runs great
-> locally; on Vercel it relies on Fluid Compute and should fit, but verify the
-> function size/cold-start on first deploy. The optional PyTorch CNN vetter is
-> excluded from `requirements.txt` to keep the bundle lean.
+> **Note on the heavy stack:** the bundled scientific deps exceed Vercel's static
+> bundle limit, so Vercel switches to **runtime dependency installation** (first
+> cold start is slower; warm requests are ~3–4s). This works today but is the main
+> thing to watch if you change deps.
 
-## Alternative: frontend on Vercel, backend anywhere
-Deploy only `web/` to Vercel and run the backend on any Python host (a VM,
-container, Fly.io, Railway, etc.) with `astrohunt serve`. Point the frontend at
-it with `NEXT_PUBLIC_API_URL`.
+## Alternative: frontend on Vercel, backend elsewhere
+Deploy only `web/` to Vercel and run the backend on any Python host
+(`astrohunt serve` on a VM/container/Fly/Railway/Render — no 250MB function
+limit, so the full `[web]` stack incl. astroquery works). Point the frontend at
+it via `NEXT_PUBLIC_API_URL`.

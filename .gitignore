@@ -21,3 +21,7 @@ data/
 
 # astroquery / astropy caches
 .astropy/
+.vercel
+
+# Vendored for Vercel CLI deploy (source of truth is src/astrohunt)
+/api/astrohunt/

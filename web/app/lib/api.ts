@@ -1,9 +1,8 @@
 // API client + types for the astrohunt backend (FastAPI).
 
-// In dev, talk to a local `astrohunt serve`. In production set NEXT_PUBLIC_API_URL
-// to your backend URL, or "" to use same-origin /api/* (Vercel Python function).
-export const API_BASE =
-  process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
+// The browser always calls same-origin /api/*; next.config.ts rewrites those to
+// the real backend (set via NEXT_PUBLIC_API_URL at build, default localhost:8000).
+export const API_BASE = "";
 
 export type AdesRow = Record<string, string>;
 

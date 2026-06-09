@@ -1,0 +1,16 @@
+# Backend (repo-root) Vercel project: only ship api/ + requirements.txt.
+# Exclude pyproject.toml so Vercel installs from requirements.txt (lean + fastapi)
+# instead of the package's full core deps (which omit fastapi and add ~120MB).
+pyproject.toml
+src
+.venv
+data
+web
+.git
+docs
+tests
+__pycache__
+**/__pycache__
+*.pyc
+.pytest_cache
+*.egg-info

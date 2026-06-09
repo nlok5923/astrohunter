@@ -76,7 +76,7 @@ def create_app():
         return {"status": "ok", "service": "astrohunt"}
 
     @app.get("/api/demo")
-    def demo(seed: int = 7, cosmic_rays: int = 6):
+    def demo(seed: int = 7, cosmic_rays: int = 0):
         with tempfile.TemporaryDirectory() as td:
             cfg = SyntheticConfig(seed=seed, n_cosmic_rays=cosmic_rays)
             paths, truth_path = generate(cfg, td)
