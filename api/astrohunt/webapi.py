@@ -57,6 +57,8 @@ def _payload(frames, result, meta: ObsMetadata):
         "median_rms_arcsec": round(result.median_rms_arcsec, 4),
         "n_candidates": result.n_candidates,
         "n_known": result.n_known,
+        "field_gif": (review.field_blink_gif(frame_list, result.tracklets)
+                      if result.tracklets else None),
         "ades": {"metaLines": ades_metadata_lines(meta), "columns": list(ADES_COLUMNS)},
         "candidates": candidates,
         "warnings": result.warnings,
@@ -97,7 +99,12 @@ def create_app():
     @app.get("/api/demo")
     def demo(seed: int = 7, cosmic_rays: int = 0):
         with tempfile.TemporaryDirectory() as td:
-            cfg = SyntheticConfig(seed=seed, n_cosmic_rays=cosmic_rays)
+            # A richer, prettier field for the showcase demo (more stars, a few
+            # bright ones, a clearly-visible mover).
+            cfg = SyntheticConfig(
+                seed=seed, n_cosmic_rays=cosmic_rays, n_stars=140,
+                star_flux_range=(2.5e3, 1.3e5), asteroid_flux=1.8e4,
+            )
             paths, truth_path = generate(cfg, td)
             refcat = load_reference_catalog(truth_path)
             meta = ObsMetadata(observer="astrohunt web demo", submitter="astrohunt web demo")

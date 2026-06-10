@@ -103,11 +103,14 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100">
       <div className="mx-auto max-w-5xl px-6 py-10 pb-28">
-        <h1 className="text-3xl font-semibold">🔭 astrohunt</h1>
-        <p className="mt-1 text-zinc-400">
-          Cross-platform, CPU-first asteroid detection. Run the demo or upload a
-          set of FITS frames of the same field, then vet candidates and export an
-          MPC-ready ADES report.
+        <h1 className="bg-gradient-to-r from-amber-300 via-orange-400 to-fuchsia-500 bg-clip-text text-5xl font-bold tracking-tight text-transparent">
+          🔭 astrohunt
+        </h1>
+        <p className="mt-2 max-w-2xl text-zinc-400">
+          Find asteroids in telescope images — the same way NASA&apos;s citizen-science
+          hunters do, but automated. Hit{" "}
+          <span className="font-medium text-emerald-400">Run demo</span> to watch the
+          pipeline spot a moving object, then vet it and export an MPC-ready ADES report.
         </p>
 
         <div className="mt-6 rounded-xl border border-zinc-800 bg-zinc-900/60 p-5">
@@ -197,7 +200,39 @@ export default function Home() {
 
         {result && (
           <>
-            <div className="mt-8 flex flex-wrap gap-6 rounded-xl border border-zinc-800 bg-zinc-900/60 p-5 text-sm">
+            {result.field_gif && (
+              <div className="mt-8 overflow-hidden rounded-2xl border border-zinc-800 bg-black">
+                <div className="flex flex-col items-center gap-4 p-5 sm:flex-row sm:items-start">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={`data:image/gif;base64,${result.field_gif}`}
+                    alt="full-field blink"
+                    className="rounded-lg border border-zinc-800"
+                    style={{ width: 380, maxWidth: "100%" }}
+                  />
+                  <div className="flex-1">
+                    <h2 className="text-lg font-semibold text-zinc-100">
+                      Spot the mover 👀
+                    </h2>
+                    <p className="mt-1 text-sm text-zinc-400">
+                      The stars stay fixed while one object{" "}
+                      <span className="text-emerald-400">(circled)</span> creeps
+                      across the field, frame by frame. That&apos;s the asteroid —
+                      exactly what a human &ldquo;blinking&rdquo; the frames looks for,
+                      found here automatically.
+                    </p>
+                    <p className="mt-3 text-xs text-zinc-500">
+                      {result.n_candidates} candidate
+                      {result.n_candidates === 1 ? "" : "s"} · astrometric
+                      consistency {result.median_rms_arcsec.toFixed(3)}″ · asinh
+                      stretch + inferno colormap
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="mt-6 flex flex-wrap gap-6 rounded-xl border border-zinc-800 bg-zinc-900/60 p-5 text-sm">
               <Stat label="frames" value={result.frames.length} />
               <Stat
                 label="astrometric consistency"

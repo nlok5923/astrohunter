@@ -19,6 +19,54 @@ import numpy as np
 from PIL import Image, ImageDraw
 
 
+# --- "inferno"-style colormap + asinh stretch for a real-telescope look ----
+
+_INFERNO_ANCHORS = [
+    (0.00, (0, 0, 4)),
+    (0.15, (40, 11, 84)),
+    (0.30, (101, 21, 110)),
+    (0.50, (159, 42, 99)),
+    (0.70, (212, 72, 66)),
+    (0.85, (245, 125, 21)),
+    (1.00, (252, 255, 164)),
+]
+
+
+def _build_lut(anchors):
+    xs = np.array([a[0] for a in anchors])
+    cols = np.array([a[1] for a in anchors], float)
+    grid = np.linspace(0, 1, 256)
+    lut = np.zeros((256, 3), np.uint8)
+    for c in range(3):
+        lut[:, c] = np.clip(np.interp(grid, xs, cols[:, c]), 0, 255).astype(np.uint8)
+    return lut
+
+
+_INFERNO_LUT = _build_lut(_INFERNO_ANCHORS)
+
+
+def _asinh_stretch(stack, lo_pct=10.0, hi_pct=99.6, q=8.0):
+    """Percentile-clip + arcsinh stretch -> 8-bit, shared scaling across frames.
+
+    arcsinh compresses the huge star-to-background dynamic range so faint stars
+    stay visible while bright cores don't blow out — the classic astro look.
+    """
+    finite = stack[np.isfinite(stack)]
+    if finite.size == 0:
+        return np.zeros_like(stack, dtype=np.uint8)
+    lo, hi = np.percentile(finite, [lo_pct, hi_pct])
+    if hi <= lo:
+        hi = lo + 1.0
+    norm = np.clip((stack - lo) / (hi - lo), 0, 1)
+    s = np.arcsinh(norm * q) / np.arcsinh(q)
+    return (s * 255).astype(np.uint8)
+
+
+def _colorize(gray8):
+    """Map an 8-bit array to RGB through the inferno LUT."""
+    return _INFERNO_LUT[gray8]
+
+
 def _normalize(stack):
     finite = stack[np.isfinite(stack)]
     if finite.size == 0:
@@ -46,19 +94,19 @@ def _candidate_frame_images(frames, candidate, upscale=5, pad=18):
     by_frame = {d.frame: d for d in candidate.detections}
     x0, y0, side = _square_box(candidate.detections, frames[0].data.shape, pad)
     stack = np.array([f.data[y0:y0 + side, x0:x0 + side] for f in frames], float)
-    norm = _normalize(stack)
+    g8 = _asinh_stretch(stack)
 
     images = []
-    for f, p8 in zip(frames, norm):
-        img = Image.fromarray(p8, mode="L").convert("RGB")
+    for f, gg in zip(frames, g8):
+        img = Image.fromarray(_colorize(gg), "RGB")
         img = img.resize((side * upscale, side * upscale), Image.NEAREST)
         draw = ImageDraw.Draw(img)
         if f.index in by_frame:
             d = by_frame[f.index]
             rx, ry = (d.x - x0) * upscale, (d.y - y0) * upscale
             r = 6 * upscale
-            draw.ellipse([rx - r, ry - r, rx + r, ry + r], outline=(80, 220, 120), width=2)
-        draw.text((4, 4), f"frame {f.index}", fill=(255, 230, 90))
+            draw.ellipse([rx - r, ry - r, rx + r, ry + r], outline=(80, 240, 130), width=2)
+        draw.text((5, 5), f"frame {f.index}", fill=(255, 235, 120))
         images.append(img)
     return images
 
@@ -80,6 +128,40 @@ def candidate_frame_pngs(frames, candidate, upscale=4, pad=18, max_frames=4):
         img.save(buf, format="PNG")
         out.append(base64.b64encode(buf.getvalue()).decode())
     return out
+
+
+def field_blink_gif(frames, tracklets, max_size=460, duration=450):
+    """Colorized blink of the WHOLE field with each candidate circled — the
+    'money shot' for a demo: the mover sweeps across a fixed starfield."""
+    frames = sorted(frames, key=lambda f: f.index)
+    h, w = frames[0].data.shape
+    stack = np.array([f.data for f in frames], float)
+    # darker background (stars-on-black) — prettier and compresses far better
+    g8 = _asinh_stretch(stack, lo_pct=32.0, hi_pct=99.7, q=7.0)
+    scale = max_size / max(h, w)
+    out_w, out_h = int(w * scale), int(h * scale)
+
+    positions: dict[int, list] = {}
+    for t in tracklets:
+        for d in t.detections:
+            positions.setdefault(d.frame, []).append((d.x, d.y, bool(t.known_name)))
+
+    images = []
+    for f, gg in zip(frames, g8):
+        img = Image.fromarray(_colorize(gg), "RGB").resize((out_w, out_h), Image.BILINEAR)
+        draw = ImageDraw.Draw(img)
+        for x, y, known in positions.get(f.index, []):
+            cx, cy = x * scale, y * scale
+            r = 13
+            color = (160, 160, 170) if known else (90, 240, 140)
+            draw.ellipse([cx - r, cy - r, cx + r, cy + r], outline=color, width=2)
+        draw.text((7, 6), f"frame {f.index}", fill=(255, 235, 120))
+        images.append(img)
+
+    buf = _io.BytesIO()
+    images[0].save(buf, format="GIF", save_all=True, append_images=images[1:],
+                   duration=duration, loop=0, optimize=True)
+    return base64.b64encode(buf.getvalue()).decode()
 
 
 def _rows_html(candidate):

@@ -60,6 +60,7 @@ export interface DetectResult {
   median_rms_arcsec: number;
   n_candidates: number;
   n_known: number;
+  field_gif?: string | null; // base64 GIF — full-field blink with movers circled
   ades: { metaLines: string[]; columns: string[] };
   candidates: Candidate[];
   warnings: string[];
