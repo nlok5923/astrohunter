@@ -23,5 +23,8 @@ data/
 .astropy/
 .vercel
 
-# Vendored for Vercel CLI deploy (source of truth is src/astrohunt)
-/api/astrohunt/
+# NOTE: api/astrohunt/ is a vendored copy of src/astrohunt, COMMITTED so that
+# GitHub-triggered Vercel deploys include it (the FastAPI bundler needs it).
+# Re-sync after changing src/astrohunt:  rm -rf api/astrohunt && cp -r src/astrohunt api/astrohunt
+api/astrohunt/__pycache__/
+api/astrohunt/**/__pycache__/
