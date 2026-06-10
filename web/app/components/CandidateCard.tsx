@@ -1,8 +1,15 @@
 "use client";
 
-import { Candidate } from "../lib/api";
+import { useState } from "react";
+import { Candidate, ExplainResult, explainCandidate } from "../lib/api";
 
 type Status = "undecided" | "accept" | "reject";
+
+const VERDICT_STYLE: Record<string, { label: string; bg: string }> = {
+  "likely-real": { label: "AI: LIKELY REAL", bg: "#2ec27e" },
+  "likely-bogus": { label: "AI: LIKELY BOGUS", bg: "#f85149" },
+  uncertain: { label: "AI: UNCERTAIN", bg: "#d29922" },
+};
 
 export function CandidateCard({
   cand,
@@ -17,6 +24,22 @@ export function CandidateCard({
   onSet: (s: Status) => void;
   onFocus: () => void;
 }) {
+  const [ai, setAi] = useState<ExplainResult | null>(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiErr, setAiErr] = useState<string | null>(null);
+
+  const askAI = async () => {
+    setAiLoading(true);
+    setAiErr(null);
+    try {
+      setAi(await explainCandidate(cand));
+    } catch (e) {
+      setAiErr(String(e));
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
   const border =
     status === "accept"
       ? "border-l-emerald-500"
@@ -97,7 +120,35 @@ export function CandidateCard({
             >
               Reset <kbd className="text-zinc-400">u</kbd>
             </button>
+            <button
+              onClick={askAI}
+              disabled={aiLoading}
+              className="rounded-md border border-violet-700 bg-violet-900/40 px-3 py-1.5 text-sm hover:bg-violet-800/50 disabled:opacity-50"
+            >
+              {aiLoading ? "✨ Thinking…" : "✨ Ask AI"}
+            </button>
           </div>
+
+          {(ai || aiErr) && (
+            <div className="mt-3 rounded-md border border-zinc-800 bg-zinc-950/70 p-3 text-sm">
+              {aiErr && <span className="text-amber-400">{aiErr}</span>}
+              {ai && (
+                <div>
+                  {ai.verdict && VERDICT_STYLE[ai.verdict] && (
+                    <span
+                      className="rounded px-2 py-0.5 text-xs font-bold text-zinc-950"
+                      style={{ background: VERDICT_STYLE[ai.verdict].bg }}
+                    >
+                      {VERDICT_STYLE[ai.verdict].label}
+                    </span>
+                  )}
+                  <p className="mt-1.5 whitespace-pre-wrap text-zinc-300">
+                    {ai.explanation}
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>

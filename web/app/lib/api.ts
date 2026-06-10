@@ -21,8 +21,30 @@ export interface Candidate {
   rms: number;
   n: number;
   gif: string; // base64 GIF
+  frames_png?: string[]; // base64 PNGs (for the AI explainer)
   rows: AdesRow[];
   detections: Detection[];
+}
+
+export interface ExplainResult {
+  verdict: "likely-real" | "likely-bogus" | "uncertain" | null;
+  explanation: string;
+}
+
+export async function explainCandidate(cand: Candidate): Promise<ExplainResult> {
+  const r = await fetch(`${API_BASE}/api/explain`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      images: cand.frames_png ?? [],
+      rate: cand.rate,
+      pa: cand.pa,
+      rms: cand.rms,
+      n: cand.n,
+    }),
+  });
+  if (!r.ok) throw new Error((await r.text()) || `explain failed: ${r.status}`);
+  return r.json();
 }
 
 export interface FrameReport {

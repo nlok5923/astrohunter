@@ -40,6 +40,7 @@ def _payload(frames, result, meta: ObsMetadata):
             "rms": round(trk.rms_arcsec, 4),
             "n": trk.n,
             "gif": review._candidate_gif(frame_list, trk),
+            "frames_png": review.candidate_frame_pngs(frame_list, trk),
             "rows": tracklet_to_ades_rows(trk, meta, i),
             "detections": [
                 {"frame": d.frame, "ra": round(d.ra, 6), "dec": round(d.dec, 6),
@@ -62,8 +63,26 @@ def _payload(frames, result, meta: ObsMetadata):
     }
 
 
+_EXPLAIN_SYSTEM = (
+    "You are an assistant for citizen-science asteroid hunting (IASC-style). You are shown a "
+    "few consecutive 'blink' frames of the same star field taken minutes apart, with a green "
+    "circle marking a candidate moving object, plus its measured motion. Assess whether the "
+    "marked object looks like a REAL moving solar-system object (asteroid/comet) or a BOGUS "
+    "artifact (cosmic ray, hot pixel, satellite/trail, noise, or a misidentified star). "
+    "Consider: does it appear as a consistent, point-like source that shifts smoothly and "
+    "linearly across the frames while the background stars stay fixed? Is the rate plausible "
+    "for an asteroid (main-belt objects move ~0.2-1 arcsec/min; NEOs faster)? Is the "
+    "straight-line fit tight?\n\n"
+    "Respond in plain text: a FIRST LINE that is exactly 'VERDICT: LIKELY REAL' or "
+    "'VERDICT: LIKELY BOGUS' or 'VERDICT: UNCERTAIN', then 2-3 short sentences a curious "
+    "beginner can understand explaining why. Be honest about uncertainty. End by reminding "
+    "that this is an AI second opinion and a human (and the Minor Planet Center) must confirm "
+    "any real discovery."
+)
+
+
 def create_app():
-    from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+    from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
     from fastapi.middleware.cors import CORSMiddleware
 
     app = FastAPI(title="astrohunt", version="0.1.0")
@@ -126,6 +145,60 @@ def create_app():
                 raise HTTPException(422, f"Pipeline error: {e}")
             frames = load_frame_set(paths, allow_no_wcs=True)
             return _payload(frames.frames, result, meta)
+
+    @app.post("/api/explain")
+    def explain(body: dict = Body(...)):
+        """AI second-opinion on a candidate (Claude vision). Degrades gracefully."""
+        try:
+            import anthropic
+        except Exception:
+            raise HTTPException(503, "AI explainer unavailable: the 'anthropic' package "
+                                     "isn't installed on the server.")
+        if not os.environ.get("ANTHROPIC_API_KEY"):
+            raise HTTPException(503, "AI explainer unavailable: set ANTHROPIC_API_KEY on "
+                                     "the server to enable it.")
+
+        images = body.get("images") or []
+        if not images:
+            raise HTTPException(400, "No candidate frames provided.")
+
+        content = [
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b}}
+            for b in images[:4]
+        ]
+        content.append({"type": "text", "text":
+            "These are consecutive blink frames of the same sky patch, minutes apart. The "
+            "green circle marks a candidate moving object. Measurements: on-sky rate "
+            f"~{body.get('rate')} arcsec/min, position angle ~{body.get('pa')} deg, "
+            f"straight-line fit RMS ~{body.get('rms')} arcsec, linked across "
+            f"{body.get('n')} frames."})
+
+        client = anthropic.Anthropic()
+        try:
+            msg = client.messages.create(
+                model="claude-opus-4-8",
+                max_tokens=2000,
+                thinking={"type": "adaptive"},
+                system=_EXPLAIN_SYSTEM,
+                messages=[{"role": "user", "content": content}],
+            )
+        except anthropic.APIError as e:  # noqa: BLE001
+            raise HTTPException(502, f"Claude API error: {e}")
+
+        text = next((b.text for b in msg.content if getattr(b, "type", "") == "text"), "").strip()
+        low = text.lower()
+        verdict = None
+        if "likely real" in low or "likely-real" in low:
+            verdict = "likely-real"
+        elif "likely bogus" in low or "likely-bogus" in low:
+            verdict = "likely-bogus"
+        elif "uncertain" in low:
+            verdict = "uncertain"
+        explanation = text
+        if low.startswith("verdict:"):
+            parts = text.split("\n", 1)
+            explanation = parts[1].strip() if len(parts) > 1 else text
+        return {"verdict": verdict, "explanation": explanation}
 
     return app
 

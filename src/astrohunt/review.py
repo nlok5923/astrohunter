@@ -41,7 +41,8 @@ def _square_box(detections, image_shape, pad=18):
     return x0, y0, max(side, 8)
 
 
-def _candidate_gif(frames, candidate, upscale=5, pad=18):
+def _candidate_frame_images(frames, candidate, upscale=5, pad=18):
+    """Render each frame's cutout (with a reticle on the mover) as a PIL image."""
     by_frame = {d.frame: d for d in candidate.detections}
     x0, y0, side = _square_box(candidate.detections, frames[0].data.shape, pad)
     stack = np.array([f.data[y0:y0 + side, x0:x0 + side] for f in frames], float)
@@ -59,11 +60,26 @@ def _candidate_gif(frames, candidate, upscale=5, pad=18):
             draw.ellipse([rx - r, ry - r, rx + r, ry + r], outline=(80, 220, 120), width=2)
         draw.text((4, 4), f"frame {f.index}", fill=(255, 230, 90))
         images.append(img)
+    return images
 
+
+def _candidate_gif(frames, candidate, upscale=5, pad=18):
+    images = _candidate_frame_images(frames, candidate, upscale, pad)
     buf = _io.BytesIO()
     images[0].save(buf, format="GIF", save_all=True, append_images=images[1:],
                    duration=500, loop=0)
     return base64.b64encode(buf.getvalue()).decode()
+
+
+def candidate_frame_pngs(frames, candidate, upscale=4, pad=18, max_frames=4):
+    """Per-frame cutouts as base64 PNGs (for sending to a vision model)."""
+    frames = sorted(frames, key=lambda f: f.index)
+    out = []
+    for img in _candidate_frame_images(frames, candidate, upscale, pad)[:max_frames]:
+        buf = _io.BytesIO()
+        img.save(buf, format="PNG")
+        out.append(base64.b64encode(buf.getvalue()).decode())
+    return out
 
 
 def _rows_html(candidate):

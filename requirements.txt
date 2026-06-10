@@ -12,3 +12,4 @@ photutils
 pillow
 fastapi
 python-multipart
+anthropic

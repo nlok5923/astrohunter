@@ -23,7 +23,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest"]
 cnn = ["torch"]             # optional PyTorch CNN real-bogus backend (NumPy MLP is default)
-web = ["fastapi", "uvicorn[standard]", "python-multipart"]   # web UI backend
+web = ["fastapi", "uvicorn[standard]", "python-multipart", "anthropic"]   # web UI backend
 
 [project.scripts]
 astrohunt = "astrohunt.cli:main"
