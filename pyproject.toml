@@ -21,7 +21,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest"]
+dev = ["pytest", "httpx"]
 cnn = ["torch"]             # optional PyTorch CNN real-bogus backend (NumPy MLP is default)
 web = ["fastapi", "uvicorn[standard]", "python-multipart", "anthropic"]   # web UI backend
 
@@ -32,7 +32,7 @@ astrohunt = "astrohunt.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-astrohunt = ["schemas/*.xsd"]
+astrohunt = ["schemas/*.xsd", "static/*.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

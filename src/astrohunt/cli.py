@@ -159,10 +159,73 @@ def cmd_solve(args):
     print(f"WCS written to: {out_path}")
 
 
+def cmd_iasc(args):
+    """Headless IASC run: data reduction + automatic search + MPC report."""
+    from .workspace import Workspace, make_settings
+
+    st = make_settings(args.preset, use_online=not args.offline,
+                       measurers=args.measurers, obs_code=args.obscode)
+    ws = Workspace.from_folder(args.path, st)
+    print(f"Image set: {ws.name}  ({len(ws.fset)} images, {ws.fset.span_minutes:.0f} min)")
+    info = ws.reduce()
+    print(f"Data reduction against {info['n_catalog']} {info['catalog']} stars:")
+    for f in info["frames"]:
+        r = f["reduction"]
+        print(f"  image {f['index'] + 1}  {f['time_utc']}  stars={r['n_matched']:>4}  "
+              f"rms={r['rms_arcsec']:.3f}\"  fwhm={r['fwhm_arcsec']:.2f}\"  zp={r['zeropoint']:.2f}")
+    for w in info["warnings"]:
+        print(f"  [warn] {w}")
+
+    tracklets = ws.detect()
+    known = ws.known_objects()
+    print(f"\nMoving objects found automatically: {len(tracklets)}")
+    objects, n_new = [], 0
+    prefix = "".join(c for c in args.prefix if c.isalnum())[:3] or "AH"
+    for t in tracklets:
+        m0 = t["measurements"][0]
+        tag = f"known: {t['known']}" if t["known"] else "UNIDENTIFIED"
+        print(f"  #{t['idx']}  {tag:<22} {t['n']} images  {t['rate']:.2f}\"/min  PA {t['pa']:.0f}  "
+              f"mag {m0['mag']:.1f}  min SNR {t['min_snr']:.1f}  at x={m0['x']:.0f} y={m0['y']:.0f}")
+        if t["known"] and not args.include_known:
+            continue
+        if t["known"]:
+            k = next((k for k in known if k["name"] == t["known"]), None)
+            desig = str(k["number"]) if k and k["number"] else t["known"]
+        else:
+            n_new += 1
+            desig = f"{prefix}{n_new:0{7 - len(prefix)}d}"
+        objects.append({"designation": desig, "measurements": t["measurements"]})
+    missed = [k for k in known if k["name"] not in {t["known"] for t in tracklets}]
+    if missed:
+        print("Catalogued objects in the field that were NOT picked up (faint — blink for them):")
+        for k in missed:
+            v = f"{k['vmag']:.1f}" if k["vmag"] is not None else "?"
+            print(f"  {k['name']:<14} V~{v}")
+
+    rep = ws.report(objects)
+    print("\n--- MPC report " + "-" * 50)
+    print(rep["text"], end="")
+    print("-" * 65)
+    for prob in rep["problems"]:
+        print(f"  [check] {prob}")
+    if args.output:
+        with open(args.output, "w") as f:
+            f.write(rep["text"])
+        print(f"written: {args.output}")
+    print("\nThis is an automatic first pass. Open the workspace (astrohunt serve) to blink "
+          "the images and confirm every object before you submit anything.")
+
+
 def cmd_serve(args):
     import uvicorn
 
-    print(f"astrohunt web API on http://{args.host}:{args.port}  (try /api/demo)")
+    url = f"http://{args.host}:{args.port}"
+    print(f"astrohunt workspace: {url}   (API demo: {url}/api/demo)")
+    if getattr(args, "open", False):
+        import threading
+        import webbrowser
+
+        threading.Timer(1.5, lambda: webbrowser.open(url)).start()
     uvicorn.run("astrohunt.webapi:app", host=args.host, port=args.port,
                 reload=args.reload)
 
@@ -307,7 +370,20 @@ def build_parser():
     srv.add_argument("--host", default="127.0.0.1")
     srv.add_argument("--port", type=int, default=8000)
     srv.add_argument("--reload", action="store_true")
+    srv.add_argument("--open", action="store_true", help="open the workspace in your browser")
     srv.set_defaults(func=cmd_serve)
+
+    ia = sub.add_parser("iasc", help="IASC image set -> automatic search + MPC 80-column report")
+    ia.add_argument("path", help="folder or .zip holding the FITS images of one set")
+    ia.add_argument("--preset", default="ps1", choices=["ps1", "ps2", "generic"])
+    ia.add_argument("--prefix", default="AH", help="3-letter prefix for new objects (ABC -> ABC0001)")
+    ia.add_argument("--include-known", action="store_true",
+                    help="also put catalogued objects in the report")
+    ia.add_argument("--measurers", help="override the MEA header line")
+    ia.add_argument("--obscode", help="override the observatory code")
+    ia.add_argument("--offline", action="store_true", help="no network (needs cached catalogue)")
+    ia.add_argument("-o", "--output", help="write the report to this file (e.g. MPCReport.txt)")
+    ia.set_defaults(func=cmd_iasc)
 
     st = sub.add_parser("stack", help="shift-and-stack / digital tracking for faint movers")
     st.add_argument("frames", nargs="+", help="FITS frames (must have a WCS)")

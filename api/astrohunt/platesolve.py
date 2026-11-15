@@ -238,3 +238,120 @@ def hint_from_header(header):
             except Exception:
                 continue
     return None
+
+
+# --- refining an approximate header WCS ("automatic reference star match") ----
+
+def _offset_peak(dx, dy, limit, bin_px):
+    n = int(2 * limit // bin_px)
+    H, xe, ye = np.histogram2d(dx.ravel(), dy.ravel(), bins=n,
+                               range=[[-limit, limit], [-limit, limit]])
+    # smooth over 2x2 bins so a peak straddling a bin edge isn't split
+    H2 = H[:-1, :-1] + H[1:, :-1] + H[:-1, 1:] + H[1:, 1:]
+    i, j = np.unravel_index(int(H2.argmax()), H2.shape)
+    return float(H2[i, j]), float(xe[i + 1]), float(ye[j + 1]), float(H2.mean())
+
+
+def refine_wcs(det_x, det_y, wcs, cat_ra, cat_dec, cat_mag=None, *,
+               n_bright=400, max_shift_px=400.0, final_tol_px=2.5):
+    """Lock an approximate WCS onto the reference catalogue.
+
+    Survey/observatory headers often carry a WCS that is good to a few tens of
+    arcseconds and a fraction of a degree in rotation — too coarse for nearest-
+    neighbour star matching. We (1) find the pixel shift (and, if needed, a
+    small rotation or a completely different orientation) that makes the most
+    detected stars coincide with projected catalogue stars, then (2) iterate
+    match -> linear fit with a shrinking tolerance, and (3) return a clean TAN
+    WCS fitted to the matched pairs.
+
+    Returns (wcs, n_matched, rms_px). Raises ValueError if no orientation gives
+    a significant match.
+    """
+    from astropy.coordinates import SkyCoord
+    from astropy.wcs.utils import fit_wcs_from_points
+    from scipy.spatial import cKDTree
+    import astropy.units as u
+
+    det_x = np.asarray(det_x, float)
+    det_y = np.asarray(det_y, float)
+    cat_ra = np.asarray(cat_ra, float)
+    cat_dec = np.asarray(cat_dec, float)
+    order = np.argsort(cat_mag) if cat_mag is not None else np.arange(len(cat_ra))
+    bright = order[:n_bright]
+    dx_ = det_x[:n_bright]
+    dy_ = det_y[:n_bright]
+
+    cx, cy = wcs.all_world2pix(cat_ra, cat_dec, 0)
+    x0 = float(np.median(det_x))
+    y0 = float(np.median(det_y))
+
+    def rotated(ang_deg, parity):
+        a = np.radians(ang_deg)
+        rx, ry = cx - x0, cy - y0
+        if parity < 0:
+            rx = -rx
+        return (x0 + rx * np.cos(a) - ry * np.sin(a), y0 + rx * np.sin(a) + ry * np.cos(a))
+
+    def score(px, py, bin_px=6.0):
+        ddx = dx_[:, None] - px[bright][None, :]
+        ddy = dy_[:, None] - py[bright][None, :]
+        return _offset_peak(ddx, ddy, max_shift_px, bin_px)
+
+    def significant(pk, mean):
+        # Poisson chance level of the busiest cell, with a healthy margin
+        return pk >= max(8.0, mean + 7.0 * np.sqrt(mean) + 4.0)
+
+    trials = [(0.0, 1)]
+    trials += [(a, 1) for a in np.arange(-3.0, 3.01, 0.25) if a != 0.0]
+    best = None
+    for ang, par in trials:
+        px, py = rotated(ang, par)
+        pk, sx, sy, mean = score(px, py)
+        if best is None or pk > best[0]:
+            best = (pk, ang, par, sx, sy, mean)
+    if not significant(best[0], best[5]):       # header orientation is wrong: scan everything
+        for par in (1, -1):
+            for ang in np.arange(0.0, 360.0, 0.5):
+                px, py = rotated(ang, par)
+                pk, sx, sy, mean = score(px, py)
+                if pk > best[0]:
+                    best = (pk, ang, par, sx, sy, mean)
+    if not significant(best[0], best[5]):
+        raise ValueError(
+            "Automatic reference-star match failed: the image stars do not line up "
+            "with the catalogue in any orientation. Check the field centre / pixel scale."
+        )
+
+    _pk, ang, par, sx, sy, _mean = best
+    px, py = rotated(ang, par)
+    px = px + sx
+    py = py + sy
+
+    # iterate: match detections to the predicted catalogue pixels, fit affine
+    tree_tol = [12.0, 6.0, final_tol_px, final_tol_px]
+    A = None
+    mi = mj = None
+    for tol in tree_tol:
+        tree = cKDTree(np.column_stack([px, py]))
+        dist, j = tree.query(np.column_stack([det_x, det_y]), distance_upper_bound=tol)
+        ok = np.isfinite(dist)
+        if ok.sum() < 6:
+            raise ValueError("Automatic reference-star match failed: too few stars matched.")
+        mi, mj = np.where(ok)[0], j[ok]
+        # affine map: catalogue header-pixels (cx, cy) -> true detector pixels
+        G = np.column_stack([np.ones(len(mj)), cx[mj], cy[mj]])
+        ax, *_ = np.linalg.lstsq(G, det_x[mi], rcond=None)
+        ay, *_ = np.linalg.lstsq(G, det_y[mi], rcond=None)
+        A = (ax, ay)
+        Gall = np.column_stack([np.ones(len(cx)), cx, cy])
+        px, py = Gall @ ax, Gall @ ay
+
+    res = np.hypot(det_x[mi] - px[mj], det_y[mi] - py[mj])
+    keep = res <= max(3.0 * np.median(res), 0.5)
+    mi, mj = mi[keep], mj[keep]
+    sky = SkyCoord(cat_ra[mj] * u.deg, cat_dec[mj] * u.deg)
+    new_wcs = fit_wcs_from_points((det_x[mi], det_y[mi]), sky, projection="TAN")
+    fx, fy = new_wcs.all_world2pix(cat_ra[mj], cat_dec[mj], 0)
+    rms_px = float(np.sqrt(np.mean((fx - det_x[mi]) ** 2 + (fy - det_y[mi]) ** 2)))
+    del A
+    return new_wcs, int(len(mi)), rms_px

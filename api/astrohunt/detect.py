@@ -25,6 +25,10 @@ class Detection:
     dec: float           # deg
     mag: float
     flux: float
+    snr: float = float("nan")
+    fwhm: float = float("nan")      # px
+    fit_rms: float = float("nan")
+    source: str = "auto"            # "auto" (pipeline) or "manual" (clicked)
 
 
 @dataclass
@@ -43,8 +47,20 @@ class Tracklet:
         return len(self.detections)
 
 
+def _tangent_arcsec(ra, dec, ra0, dec0):
+    """Small-field tangent-plane offsets (arcsec) about (ra0, dec0)."""
+    ra = np.asarray(ra, float)
+    dec = np.asarray(dec, float)
+    dra = (ra - ra0 + 180.0) % 360.0 - 180.0
+    x = dra * np.cos(np.radians(dec0)) * 3600.0
+    y = (dec - dec0) * 3600.0
+    return np.column_stack([x, y])
+
+
 def suppress_static(frames_dets, tol_arcsec=2.0, min_frames=None):
     """Drop detections that recur at the same sky position across many frames."""
+    from scipy.spatial import cKDTree
+
     all_d = [d for fr in frames_dets for d in fr]
     n_frames = len(frames_dets)
     if min_frames is None:
@@ -52,13 +68,15 @@ def suppress_static(frames_dets, tol_arcsec=2.0, min_frames=None):
     if not all_d:
         return []
 
-    coords = SkyCoord([d.ra for d in all_d] * u.deg, [d.dec for d in all_d] * u.deg)
+    ra0 = all_d[0].ra
+    dec0 = float(np.mean([d.dec for d in all_d]))
+    xy = _tangent_arcsec([d.ra for d in all_d], [d.dec for d in all_d], ra0, dec0)
+    frame_of = np.array([d.frame for d in all_d])
+    tree = cKDTree(xy)
     moving = []
-    for i, d in enumerate(all_d):
-        sep = coords[i].separation(coords).arcsec
-        frames_present = {all_d[j].frame for j in np.where(sep < tol_arcsec)[0]}
-        if len(frames_present) < min_frames:
-            moving.append(d)
+    for i, nbrs in enumerate(tree.query_ball_point(xy, tol_arcsec)):
+        if len(set(frame_of[nbrs].tolist())) < min_frames:
+            moving.append(all_d[i])
     return moving
 
 
@@ -99,71 +117,81 @@ def link_tracklets(
     min_rate_arcsec_min=0.05,
     tol_arcsec=2.5,
     min_points=3,
+    max_mag_spread=None,
 ):
     """Link moving detections into linear-motion tracklets.
 
-    Seeds a velocity from every pair of detections in the two earliest frames,
-    predicts positions in the remaining frames, and gathers inliers (a light
-    RANSAC). Works well for the small detection counts in 4-image sets.
+    Seeds a velocity from every pair of detections in two different frames
+    (KD-tree limited to the allowed rate range), predicts positions in the
+    remaining frames and gathers inliers (a light RANSAC). Seeding from every
+    frame pair means an object missing from the first frame is still found.
+    `max_mag_spread` (mag) optionally rejects sets whose brightness is wildly
+    inconsistent — a real asteroid barely changes over an hour.
     """
+    from scipy.spatial import cKDTree
+
     by_frame: dict[int, list[Detection]] = {}
     for d in moving:
         by_frame.setdefault(d.frame, []).append(d)
     frames = sorted(by_frame)
-    if len(frames) < min(min_points, 2):
+    if len(frames) < max(min(min_points, 2), 2):
         return []
 
-    candidates = []
-    seed_a = by_frame[frames[0]]
-    seed_b_frames = frames[1:]
-    for da in seed_a:
-        for fb in seed_b_frames:
-            for db in by_frame[fb]:
-                dt = (db.time_mjd - da.time_mjd) * 1440.0
-                if dt <= 0:
-                    continue
-                rate = _great_circle_arcsec(da.ra, da.dec, db.ra, db.dec) / dt
-                if not (min_rate_arcsec_min <= rate <= max_rate_arcsec_min):
-                    continue
-                vra = (db.ra - da.ra) / dt      # deg/min
-                vdec = (db.dec - da.dec) / dt
+    ra0 = moving[0].ra
+    dec0 = float(np.mean([d.dec for d in moving]))
+    xy = {f: _tangent_arcsec([d.ra for d in by_frame[f]], [d.dec for d in by_frame[f]],
+                             ra0, dec0) for f in frames}
+    tree = {f: cKDTree(xy[f]) for f in frames}
+    tmin = {f: by_frame[f][0].time_mjd * 1440.0 for f in frames}   # minutes
 
-                inliers = [da]
-                for fc in frames:
-                    if fc == da.frame:
+    candidates = {}
+    # a seed pair (fa, fb) can only yield >= min_points if enough frames remain
+    for ia, fa in enumerate(frames):
+        if len(frames) - ia < min_points:
+            break
+        for fb in frames[ia + 1:]:
+            dt = tmin[fb] - tmin[fa]
+            if dt <= 0:
+                continue
+            pairs = tree[fa].query_ball_tree(tree[fb], max_rate_arcsec_min * dt)
+            for ka, nbrs in enumerate(pairs):
+                pa = xy[fa][ka]
+                for kb in nbrs:
+                    v = (xy[fb][kb] - pa) / dt          # arcsec/min
+                    if np.hypot(v[0], v[1]) < min_rate_arcsec_min:
                         continue
-                    tc = by_frame[fc][0].time_mjd
-                    dtc = (tc - da.time_mjd) * 1440.0
-                    pra = da.ra + vra * dtc
-                    pdec = da.dec + vdec * dtc
-                    best, best_sep = None, tol_arcsec
-                    for dc in by_frame[fc]:
-                        s = _great_circle_arcsec(pra, pdec, dc.ra, dc.dec)
-                        if s < best_sep:
-                            best, best_sep = dc, s
-                    if best is not None:
-                        inliers.append(best)
-
-                # one detection per frame, earliest first
-                seen, uniq = {}, []
-                for d in sorted(inliers, key=lambda d: d.time_mjd):
-                    if d.frame not in seen:
-                        seen[d.frame] = True
-                        uniq.append(d)
-                if len(uniq) >= min_points:
-                    candidates.append(uniq)
+                    members = {fa: ka, fb: kb}
+                    for fc in frames:
+                        if fc in members:
+                            continue
+                        pred = pa + v * (tmin[fc] - tmin[fa])
+                        dist, kc = tree[fc].query(pred, distance_upper_bound=tol_arcsec)
+                        if np.isfinite(dist):
+                            members[fc] = int(kc)
+                    if len(members) >= min_points:
+                        key = tuple(sorted(members.items()))
+                        candidates[key] = [by_frame[f][k] for f, k in key]
 
     # Deduplicate overlapping candidates: prefer more points, then lower RMS.
     scored = []
-    for dets in candidates:
+    for dets in candidates.values():
         rate_ra, rate_dec, rate_total, rms, pa = _fit_tracklet(dets)
-        scored.append((len(dets), -rms, dets, (rate_ra, rate_dec, rate_total, rms, pa)))
-    scored.sort(reverse=True)
+        if rms > tol_arcsec:
+            continue
+        if not (min_rate_arcsec_min <= rate_total <= max_rate_arcsec_min):
+            continue
+        if max_mag_spread is not None:
+            mags = np.array([d.mag for d in dets], float)
+            mags = mags[np.isfinite(mags)]
+            if mags.size >= 2 and (mags.max() - mags.min()) > max_mag_spread:
+                continue
+        scored.append((len(dets), -rms, id(dets), dets,
+                       (rate_ra, rate_dec, rate_total, rms, pa)))
+    scored.sort(key=lambda s: (s[0], s[1]), reverse=True)
 
     used_ids = set()
     tracklets = []
-    for npts, _negrms, dets, fit in scored:
-        key = frozenset((d.frame, round(d.x, 1), round(d.y, 1)) for d in dets)
+    for _npts, _negrms, _id, dets, fit in scored:
         ids = set((d.frame, round(d.x, 2), round(d.y, 2)) for d in dets)
         if ids & used_ids:
             continue

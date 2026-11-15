@@ -20,6 +20,7 @@ import tempfile
 from typing import List, Optional
 
 from . import review
+from . import workspace as wsmod
 from .ades import ADES_COLUMNS, ObsMetadata, ades_metadata_lines, tracklet_to_ades_rows
 from .catalog import load_reference_catalog
 from .io import load_frame_set
@@ -206,6 +207,158 @@ def create_app():
             parts = text.split("\n", 1)
             explanation = parts[1].strip() if len(parts) > 1 else text
         return {"verdict": verdict, "explanation": explanation}
+
+    # ------------------------------------------------------------------
+    # Interactive workspace (the Astrometrica-style workflow). State lives in
+    # this process, so these endpoints are for the local `astrohunt serve` app.
+    # ------------------------------------------------------------------
+    from fastapi.responses import HTMLResponse, Response
+
+    def _ws(ws_id: str):
+        try:
+            return wsmod.get(ws_id)
+        except KeyError as e:
+            raise HTTPException(404, str(e.args[0]))
+
+    def _run(fn, *a, **kw):
+        try:
+            return fn(*a, **kw)
+        except HTTPException:
+            raise
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(422, str(e))
+
+    def _settings(body: dict):
+        st = dict(body.get("settings") or {})
+        st.pop("preset", None)
+        return wsmod.make_settings(body.get("preset") or "generic", **st)
+
+    @app.get("/", response_class=HTMLResponse)
+    def workspace_page():
+        here = os.path.dirname(os.path.abspath(__file__))
+        with open(os.path.join(here, "static", "workspace.html"), encoding="utf-8") as f:
+            return HTMLResponse(f.read(), headers={"Cache-Control": "no-store"})
+
+    @app.get("/api/presets")
+    def presets():
+        from dataclasses import asdict
+
+        return {name: asdict(wsmod.make_settings(name)) for name in wsmod.PRESETS}
+
+    @app.post("/api/ws/open")
+    def ws_open(body: dict = Body(...)):
+        """Open an image set from a folder (or .zip) on this computer."""
+        path = (body.get("path") or "").strip()
+        if not path:
+            raise HTTPException(400, "Give the folder (or .zip) that holds the FITS images.")
+        ws = _run(wsmod.Workspace.from_folder, path, _settings(body))
+        return wsmod.register(ws).info()
+
+    @app.post("/api/ws/upload")
+    async def ws_upload(files: List[UploadFile] = File(...), preset: str = Form("generic")):
+        import shutil
+
+        td = tempfile.mkdtemp(prefix="astrohunt-ws-")
+        try:
+            name = ""
+            for f in files:
+                base = os.path.basename(f.filename or "frame.fits")
+                dest = os.path.join(td, base)
+                with open(dest, "wb") as out:
+                    while chunk := await f.read(1 << 20):
+                        out.write(chunk)
+                if base.lower().endswith(".zip"):
+                    name = os.path.splitext(base)[0]
+                    import zipfile
+
+                    with zipfile.ZipFile(dest) as z:
+                        for info in z.infolist():
+                            b = os.path.basename(info.filename)
+                            if info.is_dir() or b.startswith(".") or \
+                                    not b.lower().endswith(wsmod.FITS_EXT):
+                                continue
+                            with z.open(info) as src, open(os.path.join(td, b), "wb") as dst:
+                                shutil.copyfileobj(src, dst)
+                    os.remove(dest)
+            paths = wsmod.find_fits(td)
+            if len(paths) < 2:
+                raise ValueError("Upload at least 2 FITS images of the same field (or a .zip of them).")
+            ws = wsmod.Workspace(paths, wsmod.make_settings(preset),
+                                 name=name or "uploaded set", tmpdir=td)
+        except Exception as e:  # noqa: BLE001
+            shutil.rmtree(td, ignore_errors=True)
+            raise HTTPException(422, str(e))
+        return wsmod.register(ws).info()
+
+    @app.get("/api/ws/{ws_id}")
+    def ws_info(ws_id: str):
+        return _ws(ws_id).info()
+
+    @app.post("/api/ws/{ws_id}/settings")
+    def ws_settings(ws_id: str, body: dict = Body(...)):
+        ws = _ws(ws_id)
+        from dataclasses import asdict
+
+        cur = asdict(ws.settings)
+        if body.get("preset"):
+            cur.update(wsmod.PRESETS.get(body["preset"], {}))
+        cur.update(body.get("settings") or {})
+        known = wsmod.Settings.__dataclass_fields__
+        ws.settings = _run(lambda: wsmod.Settings(**{k: v for k, v in cur.items() if k in known}))
+        return ws.info()
+
+    @app.post("/api/ws/{ws_id}/reduce")
+    def ws_reduce(ws_id: str, body: dict = Body(default={})):
+        ws = _ws(ws_id)
+        hint = None
+        if body.get("hint_ra") is not None and body.get("hint_dec") is not None:
+            hint = (float(body["hint_ra"]), float(body["hint_dec"]))
+        refcat = None
+        if body.get("ref_catalog_path"):
+            refcat = _run(load_reference_catalog, body["ref_catalog_path"])
+        return _run(ws.reduce, refcat, hint)
+
+    @app.get("/api/ws/{ws_id}/frame/{frame}.png")
+    def ws_frame(ws_id: str, frame: str, lo: float = -2.0, hi: float = 12.0,
+                 stretch: str = "linear"):
+        ws = _ws(ws_id)
+        key = "stack" if frame == "stack" else int(frame)
+        png = _run(ws.render_png, key, lo, hi, stretch)
+        return Response(png, media_type="image/png",
+                        headers={"Cache-Control": "private, max-age=3600"})
+
+    @app.post("/api/ws/{ws_id}/measure")
+    def ws_measure(ws_id: str, body: dict = Body(...)):
+        ws = _ws(ws_id)
+        return _run(ws.measure, int(body["frame"]), float(body["x"]), float(body["y"]),
+                    bool(body.get("snap", True)))
+
+    @app.post("/api/ws/{ws_id}/predict")
+    def ws_predict(ws_id: str, body: dict = Body(...)):
+        ws = _ws(ws_id)
+        ms = body.get("measurements") or []
+        return {
+            "positions": [_run(ws.predict, ms, i) for i in range(len(ws.fset))],
+            "motion": wsmod.motion_summary(ms),
+        }
+
+    @app.post("/api/ws/{ws_id}/detect")
+    def ws_detect(ws_id: str):
+        ws = _ws(ws_id)
+        return {"tracklets": _run(ws.detect), "known": _run(ws.known_objects)}
+
+    @app.get("/api/ws/{ws_id}/known")
+    def ws_known(ws_id: str):
+        return {"known": _run(_ws(ws_id).known_objects)}
+
+    @app.post("/api/ws/{ws_id}/stack")
+    def ws_stack(ws_id: str, body: dict = Body(...)):
+        return _run(_ws(ws_id).stack, float(body["rate"]), float(body["pa"]),
+                    body.get("combine", "mean"))
+
+    @app.post("/api/ws/{ws_id}/report")
+    def ws_report(ws_id: str, body: dict = Body(...)):
+        return _run(_ws(ws_id).report, body.get("objects") or [], body.get("header"))
 
     return app
 

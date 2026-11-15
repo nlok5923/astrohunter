@@ -1,0 +1,754 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>astrohunt workspace</title>
+<style>
+  :root {
+    --bg:#0b0e13; --panel:#12161d; --panel2:#181d26; --line:#272e3a; --text:#e4e7ec;
+    --dim:#8e97a6; --accent:#f2b84b; --ok:#3ecf8e; --bad:#f2675c; --info:#5aa9ff; --known:#b48cff;
+  }
+  * { box-sizing:border-box; }
+  html, body { height:100%; margin:0; }
+  body { background:var(--bg); color:var(--text); font:13px/1.45 -apple-system,"SF Pro Text","Segoe UI",Roboto,sans-serif;
+         display:flex; flex-direction:column; overflow:hidden; }
+  button, input, select, textarea { font:inherit; color:inherit; }
+  button { background:var(--panel2); border:1px solid var(--line); border-radius:6px; padding:5px 10px; cursor:pointer; white-space:nowrap; }
+  button:hover:not(:disabled) { border-color:#465066; background:#1f2632; }
+  button:disabled { opacity:.4; cursor:default; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#1a1304; font-weight:600; }
+  button.primary:hover:not(:disabled) { background:#ffc965; }
+  button.on { border-color:var(--accent); color:var(--accent); }
+  button.small { padding:2px 7px; font-size:12px; }
+  input[type=text], input[type=number], select, textarea {
+    background:#0d1117; border:1px solid var(--line); border-radius:5px; padding:4px 7px; min-width:0; }
+  input:focus, select:focus, textarea:focus, button:focus-visible { outline:2px solid var(--info); outline-offset:1px; }
+  kbd { background:#232a36; border-radius:3px; padding:0 5px; font:11px ui-monospace,Menlo,monospace; }
+  .mono { font-family:ui-monospace,"SF Mono",Menlo,monospace; font-variant-numeric:tabular-nums; }
+  .dim { color:var(--dim); }
+
+  header { display:flex; align-items:center; gap:10px; padding:8px 12px; border-bottom:1px solid var(--line); background:var(--panel); flex-wrap:wrap; }
+  header h1 { font-size:15px; margin:0 6px 0 0; letter-spacing:.02em; }
+  header h1 span { color:var(--accent); }
+  .steps { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+  .steps .n { color:var(--dim); font-size:11px; margin-right:-2px; }
+  #setname { color:var(--dim); margin-left:auto; max-width:30ch; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+  main { flex:1; display:flex; min-height:0; }
+  #viewer { flex:1; min-width:0; display:flex; flex-direction:column; }
+  #toolbar { display:flex; align-items:center; gap:6px; padding:6px 10px; border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  #tabs { display:flex; gap:3px; }
+  #tabs button { min-width:30px; padding:4px 8px; }
+  #tabs button.cur { background:var(--accent); border-color:var(--accent); color:#1a1304; font-weight:700; }
+  .sep { width:1px; height:20px; background:var(--line); margin:0 4px; }
+  #toolbar label { display:flex; align-items:center; gap:5px; color:var(--dim); }
+  #stage { position:relative; flex:1; min-height:0; background:#000; overflow:hidden; cursor:crosshair; }
+  #stage canvas { position:absolute; inset:0; width:100%; height:100%; display:block; }
+  #stage.inv #img { filter:invert(1); }
+  #empty { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; text-align:center; color:var(--dim); padding:24px; pointer-events:none; }
+  #empty[hidden], #frameinfo[hidden] { display:none; }
+  #empty div { max-width:46ch; }
+  #empty b { color:var(--text); }
+  #frameinfo { position:absolute; left:10px; top:8px; background:rgba(8,10,14,.78); padding:3px 8px; border-radius:5px; pointer-events:none; }
+  #status { display:flex; gap:14px; padding:5px 10px; border-top:1px solid var(--line); background:var(--panel); min-height:28px; align-items:center; }
+  #status #msg { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #status #msg.err { color:var(--bad); } #status #msg.good { color:var(--ok); }
+
+  aside { width:400px; max-width:46vw; border-left:1px solid var(--line); background:var(--panel); overflow-y:auto; }
+  details { border-bottom:1px solid var(--line); }
+  summary { padding:8px 12px; cursor:pointer; font-weight:600; user-select:none; display:flex; gap:8px; align-items:center; }
+  summary .count { color:var(--dim); font-weight:400; margin-left:auto; }
+  .body { padding:2px 12px 12px; }
+  .grid { display:grid; grid-template-columns:110px 1fr; gap:5px 8px; align-items:center; }
+  .grid label { color:var(--dim); }
+  .row { display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin-top:8px; }
+  .row input[type=text] { flex:1; }
+  table { border-collapse:collapse; width:100%; }
+  th, td { padding:3px 6px; text-align:right; border-bottom:1px solid var(--line); }
+  th { color:var(--dim); font-weight:500; font-size:11px; }
+  td:first-child, th:first-child { text-align:left; }
+  .hint { color:var(--dim); font-size:12px; margin:6px 0 0; }
+  .warn { color:var(--accent); font-size:12px; margin:4px 0 0; }
+  .obj { border:1px solid var(--line); border-radius:7px; margin-top:8px; background:var(--panel2); }
+  .obj.active { border-color:var(--accent); }
+  .obj .oh { display:flex; gap:6px; align-items:center; padding:6px 8px; }
+  .obj .oh input { width:9ch; font-family:ui-monospace,Menlo,monospace; }
+  .obj .oh .meta { color:var(--dim); font-size:12px; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .obj table { font-size:12px; }
+  .obj td.bad { color:var(--bad); } .obj td.miss { color:var(--dim); text-align:center; }
+  .tag { font-size:10px; padding:1px 6px; border-radius:9px; border:1px solid currentColor; }
+  .tag.known { color:var(--known); } .tag.new { color:var(--ok); }
+  .item { display:flex; gap:8px; align-items:center; padding:5px 0; border-bottom:1px solid var(--line); }
+  .item .t { flex:1; min-width:0; }
+  .item .t div { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #report { width:100%; height:190px; font:11.5px/1.4 ui-monospace,"SF Mono",Menlo,monospace; white-space:pre; overflow:auto; resize:vertical; }
+  #problems { margin:6px 0 0; padding-left:18px; color:var(--accent); font-size:12px; }
+  #problems.fine { list-style:none; padding:0; color:var(--ok); }
+  #drop { border:1px dashed #3a4354; border-radius:7px; padding:9px; text-align:center; color:var(--dim); margin-top:8px; }
+  #drop.over { border-color:var(--accent); color:var(--accent); }
+  @media (max-width:900px) { main { flex-direction:column; } aside { width:auto; max-width:none; border-left:0; border-top:1px solid var(--line); max-height:45vh; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>astro<span>hunt</span> workspace</h1>
+  <div class="steps">
+    <span class="n">1</span><button id="btnReduce" disabled title="Astrometry + photometry against Gaia for every image">Data reduction</button>
+    <span class="n">2</span><button id="btnDetect" disabled title="Automatic moving-object detection + known-object lookup">Find moving objects</button>
+    <span class="n">3</span><span class="dim">click the object in each image</span>
+    <span class="n">4</span><button id="btnCopy" class="primary" disabled>Copy MPC report</button>
+  </div>
+  <span id="setname"></span>
+</header>
+
+<main>
+  <section id="viewer">
+    <div id="toolbar">
+      <div id="tabs"></div>
+      <button id="btnBlink" disabled title="Blink (space)">▶ Blink</button>
+      <label>speed <input id="speed" type="range" min="150" max="1500" step="50" value="600" style="width:80px"></label>
+      <span class="sep"></span>
+      <button id="btnInvert" title="Invert (i)">Invert</button>
+      <button id="btnFlipX" title="Mirror left-right">Flip ↔</button>
+      <button id="btnFlipY" title="Mirror up-down">Flip ↕</button>
+      <label>contrast <input id="contrast" type="range" min="3" max="60" step="1" value="12" style="width:90px"></label>
+      <span class="sep"></span>
+      <button id="btnFit" title="Fit image (0)">Fit</button>
+      <button id="btnZoomIn" title="Zoom in (+)">＋</button>
+      <button id="btnZoomOut" title="Zoom out (−)">－</button>
+      <button id="btnMarks" class="on" title="Show/hide markers (m)">Markers</button>
+    </div>
+    <div id="stage">
+      <canvas id="img"></canvas>
+      <canvas id="ovl"></canvas>
+      <div id="frameinfo" class="mono" hidden></div>
+      <div id="empty"><div>
+        <p><b>Open an image set to begin.</b></p>
+        <p>Paste the folder (or .zip) that holds the FITS images into “Image set” on the right, or drop the files there.</p>
+        <p>Then: data reduction → blink → click the moving object in every image → copy the MPC report.</p>
+      </div></div>
+    </div>
+    <div id="status">
+      <span id="msg">Ready.</span>
+      <span id="cursor" class="mono dim"></span>
+    </div>
+  </section>
+
+  <aside>
+    <details open id="secSet">
+      <summary>Image set</summary>
+      <div class="body">
+        <div class="row" style="margin-top:0">
+          <input id="path" type="text" placeholder="/Users/you/Downloads/ps1-…  (folder or .zip)" spellcheck="false">
+          <button id="btnOpen" class="primary">Open</button>
+        </div>
+        <div id="drop">…or drop FITS files / a .zip here <input id="file" type="file" multiple accept=".fits,.fit,.fts,.fz,.gz,.zip" hidden> <button id="btnPick" class="small">Choose files</button></div>
+        <div class="grid" style="margin-top:10px">
+          <label for="preset">Configuration</label>
+          <select id="preset"></select>
+          <label for="s_obs_code">Observatory code</label><input id="s_obs_code" type="text" maxlength="3">
+          <label for="s_measurers">Measurers</label><input id="s_measurers" type="text" placeholder="A. Name, B. Name">
+          <label for="s_observers">Observers</label><input id="s_observers" type="text">
+          <label for="s_telescope">Telescope</label><input id="s_telescope" type="text">
+          <label for="s_contact">Contact</label><input id="s_contact" type="text" placeholder="optional">
+          <label for="s_net">Catalogue (NET)</label><input id="s_net" type="text">
+          <label for="s_band">Mag band</label><input id="s_band" type="text" maxlength="1">
+          <label for="prefix">Designation prefix</label><input id="prefix" type="text" maxlength="3" placeholder="ABC" class="mono">
+        </div>
+        <details style="border:0;margin-top:6px">
+          <summary style="padding:4px 0;font-weight:500" class="dim">Detection settings</summary>
+          <div class="grid">
+            <label for="s_threshold_sigma">Detection σ</label><input id="s_threshold_sigma" type="number" step="0.5" min="2">
+            <label for="s_max_rate_arcsec_min">Max speed ″/min</label><input id="s_max_rate_arcsec_min" type="number" step="0.5" min="0.1">
+            <label for="s_min_points">Min images</label><input id="s_min_points" type="number" step="1" min="2">
+            <label for="s_link_tol_arcsec">Line tolerance ″</label><input id="s_link_tol_arcsec" type="number" step="0.1" min="0.1">
+            <label for="s_plate_order">Plate fit order</label><input id="s_plate_order" type="number" step="1" min="1" max="3">
+            <label for="s_use_online">Online catalogues</label><input id="s_use_online" type="checkbox" style="justify-self:start">
+          </div>
+        </details>
+        <table id="frames" style="margin-top:10px" hidden>
+          <thead><tr><th>#</th><th>UTC mid-exposure</th><th>stars</th><th>RMS″</th><th>FWHM″</th><th>ZP</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <div id="warnings"></div>
+      </div>
+    </details>
+
+    <details open id="secObj">
+      <summary>Objects in report <span class="count" id="nObj">0</span></summary>
+      <div class="body">
+        <div class="row" style="margin-top:0">
+          <button id="btnNew" disabled>＋ New object</button>
+          <span class="hint" style="margin:0">Click in the image to measure the active object.</span>
+        </div>
+        <div id="objects"></div>
+      </div>
+    </details>
+
+    <details open id="secCand">
+      <summary>Automatic candidates <span class="count" id="nCand">–</span></summary>
+      <div class="body"><div id="cands"><p class="hint">Run “Find moving objects”. Always confirm a candidate by blinking before you add it.</p></div></div>
+    </details>
+
+    <details id="secKnown">
+      <summary>Known objects in field <span class="count" id="nKnown">–</span></summary>
+      <div class="body"><div id="knowns"><p class="hint">Listed after “Find moving objects” (SkyBoT, needs internet).</p></div></div>
+    </details>
+
+    <details id="secStack">
+      <summary>Track &amp; stack</summary>
+      <div class="body">
+        <p class="hint" style="margin-top:0">Shift the images along a motion and add them — a faint mover becomes a point, stars become trails.</p>
+        <div class="row">
+          <label class="dim" for="stRate">″/min</label><input id="stRate" type="number" step="0.05" value="0.5" style="width:70px">
+          <label class="dim" for="stPa">PA°</label><input id="stPa" type="number" step="1" value="270" style="width:70px">
+          <button id="btnStackObj" class="small" disabled title="Use the active object's motion">from active object</button>
+          <button id="btnStack" disabled>Stack</button>
+        </div>
+      </div>
+    </details>
+
+    <details open id="secRep">
+      <summary>MPC report</summary>
+      <div class="body">
+        <textarea id="report" readonly spellcheck="false" aria-label="MPC report"></textarea>
+        <ul id="problems"></ul>
+        <div class="row">
+          <button id="btnCopy2" disabled>Copy</button>
+          <button id="btnSave" disabled>Download MPCReport.txt</button>
+        </div>
+        <p class="hint">Keys: <kbd>1</kbd>–<kbd>9</kbd> image · <kbd>←</kbd><kbd>→</kbd> step · <kbd>space</kbd> blink · <kbd>i</kbd> invert · <kbd>m</kbd> markers · <kbd>+</kbd><kbd>−</kbd><kbd>0</kbd> zoom · scroll to zoom, drag to pan, click to measure.</p>
+      </div>
+    </details>
+  </aside>
+</main>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const S = {
+  ws: null, cur: 0, imgs: [], stackImg: null, showStack: false,
+  zoom: 1, ox: 0, oy: 0, flipX: false, flipY: true, inv: false, marks: true, hi: 12,
+  objects: [], active: null, cands: [], known: [], predicted: null,
+  blink: null, presets: {}, busy: false,
+};
+const SETTING_IDS = ["obs_code","measurers","observers","telescope","contact","net","band",
+  "threshold_sigma","max_rate_arcsec_min","min_points","link_tol_arcsec","plate_order","use_online"];
+const NUMERIC = new Set(["threshold_sigma","max_rate_arcsec_min","min_points","link_tol_arcsec","plate_order"]);
+
+function msg(text, kind) { const m = $("msg"); m.textContent = text; m.className = kind || ""; }
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  if (!r.ok) {
+    let detail = r.statusText;
+    try { const j = await r.json(); detail = j.detail || detail; } catch (e) {}
+    throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+  }
+  return r.json();
+}
+const post = (path, body) => api(path, {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body || {})});
+async function busy(label, fn) {
+  if (S.busy) return;
+  S.busy = true; msg(label + "…"); refreshButtons();
+  try { await fn(); } catch (e) { msg(e.message, "err"); } finally { S.busy = false; refreshButtons(); }
+}
+function el(tag, props, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(props || {})) {
+    if (k === "class") e.className = v; else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+    else if (k === "text") e.textContent = v; else e.setAttribute(k, v);
+  }
+  for (const k of kids) if (k != null) e.append(k);
+  return e;
+}
+const fmt = (v, d) => (v == null || !isFinite(v)) ? "–" : Number(v).toFixed(d);
+
+/* ---------- settings ---------- */
+function readSettings() {
+  const out = {};
+  for (const k of SETTING_IDS) {
+    const e = $("s_" + k);
+    if (e.type === "checkbox") out[k] = e.checked;
+    else if (NUMERIC.has(k)) { if (e.value !== "") out[k] = Number(e.value); }
+    else out[k] = e.value.trim();
+  }
+  if (out.obs_code === "") out.obs_code = "XXX";
+  out.flip_x = S.flipX; out.flip_y = S.flipY;
+  return out;
+}
+function fillSettings(st) {
+  for (const k of SETTING_IDS) {
+    const e = $("s_" + k); if (st[k] === undefined || st[k] === null) continue;
+    if (e.type === "checkbox") e.checked = !!st[k]; else e.value = st[k];
+  }
+}
+function saveLocal() {
+  try {
+    localStorage.setItem("astrohunt:prefs", JSON.stringify({
+      preset: $("preset").value, prefix: $("prefix").value, path: $("path").value,
+      measurers: $("s_measurers").value, contact: $("s_contact").value }));
+    if (S.ws) localStorage.setItem("astrohunt:objects:" + S.ws.name, JSON.stringify(S.objects));
+  } catch (e) {}
+}
+async function pushSettings() {
+  if (!S.ws) return;
+  S.ws = await post(`/api/ws/${S.ws.id}/settings`, {settings: readSettings()});
+}
+
+/* ---------- loading a set ---------- */
+async function afterOpen(info) {
+  S.ws = info; S.cur = 0; S.objects = []; S.active = null; S.cands = []; S.known = [];
+  S.predicted = null; S.stackImg = null; S.showStack = false; stopBlink();
+  try {
+    const saved = JSON.parse(localStorage.getItem("astrohunt:objects:" + info.name) || "[]");
+    if (Array.isArray(saved) && saved.length && saved.every(o => o.measurements.every(m => m.frame < info.frames.length))) {
+      S.objects = saved; S.active = saved[0].id;
+    }
+  } catch (e) {}
+  $("setname").textContent = `${info.name} · ${info.frames.length} images · ${fmt(info.span_minutes, 0)} min` +
+    (info.pixel_scale ? ` · ${fmt(info.pixel_scale, 2)}″/px` : "");
+  $("empty").hidden = true;
+  await pushSettings();
+  loadImages(true);
+  renderAll();
+  msg(`Loaded ${info.frames.length} images. Next: Data reduction.`, "good");
+}
+function frameUrl(i) { return `/api/ws/${S.ws.id}/frame/${i}.png?lo=-2&hi=${S.hi}&v=${S.ws.id}`; }
+function loadImages(fit) {
+  const n = S.ws.frames.length; let left = n;
+  const next = new Array(n);
+  for (let i = 0; i < n; i++) {
+    const im = new Image();
+    im.onload = () => { next[i] = im; if (--left === 0) { S.imgs = next; if (fit) fitView(); draw(); } };
+    im.onerror = () => msg("Could not render image " + (i + 1), "err");
+    im.src = frameUrl(i);
+  }
+  if (S.stackImg) loadStack();
+}
+function loadStack() {
+  const im = new Image();
+  im.onload = () => { S.stackImg = im; draw(); };
+  im.src = `/api/ws/${S.ws.id}/frame/stack.png?lo=-2&hi=${S.hi}&t=${Date.now()}`;
+}
+async function openPath() {
+  const path = $("path").value.trim();
+  if (!path) { msg("Paste the folder that holds the FITS images first.", "err"); return; }
+  await busy("Opening image set", async () => {
+    await afterOpen(await post("/api/ws/open", {path, preset: $("preset").value}));
+    saveLocal();
+  });
+}
+async function uploadFiles(files) {
+  if (!files.length) return;
+  await busy(`Uploading ${files.length} file(s)`, async () => {
+    const fd = new FormData();
+    for (const f of files) fd.append("files", f);
+    fd.append("preset", $("preset").value);
+    await afterOpen(await api("/api/ws/upload", {method:"POST", body: fd}));
+  });
+}
+
+/* ---------- pipeline steps ---------- */
+async function doReduce() {
+  await busy("Data reduction (downloading Gaia stars, solving each image)", async () => {
+    await pushSettings();
+    S.ws = await post(`/api/ws/${S.ws.id}/reduce`, {});
+    renderAll();
+    msg(`Data reduction done — median fit RMS ${fmt(S.ws.median_rms_arcsec, 3)}″ against ${S.ws.n_catalog} ${S.ws.catalog || ""} stars. Now blink, or find moving objects.`, "good");
+  });
+}
+async function doDetect() {
+  await busy("Searching for moving objects", async () => {
+    await pushSettings();
+    const r = await post(`/api/ws/${S.ws.id}/detect`, {});
+    S.cands = r.tracklets; S.known = r.known;
+    renderAll();
+    const nk = S.cands.filter(c => c.known).length;
+    msg(`${S.cands.length} moving candidate(s) (${nk} known), ${S.known.length} catalogued object(s) in the field. Blink each one before adding it.`, "good");
+  });
+}
+async function doStack() {
+  await busy("Stacking", async () => {
+    await post(`/api/ws/${S.ws.id}/stack`, {rate: Number($("stRate").value), pa: Number($("stPa").value)});
+    S.showStack = true; stopBlink(); S.stackImg = S.stackImg || new Image(); loadStack(); renderTabs();
+    msg("Stack ready (view only — measure objects on the individual images).", "good");
+  });
+}
+
+/* ---------- objects ---------- */
+function nextDesignation() {
+  const pre = ($("prefix").value.trim() || "AH").replace(/[^A-Za-z0-9]/g, "").slice(0, 3);
+  const used = new Set(S.objects.map(o => o.designation));
+  for (let k = 1; k < 10000; k++) {
+    const d = pre + String(k).padStart(7 - pre.length, "0");
+    if (!used.has(d)) return d;
+  }
+  return pre + "9999";
+}
+function newObject(designation, measurements, known) {
+  const o = {id: Math.random().toString(36).slice(2, 9), designation: designation || nextDesignation(),
+             measurements: measurements || [], known: !!known, motion: null};
+  S.objects.push(o); S.active = o.id; S.predicted = null;
+  objectsChanged(); return o;
+}
+const activeObj = () => S.objects.find(o => o.id === S.active) || null;
+async function refreshPrediction() {
+  const o = activeObj(); S.predicted = null;
+  if (o && o.measurements.length >= 2 && S.ws && S.ws.reduced) {
+    try {
+      const r = await post(`/api/ws/${S.ws.id}/predict`, {measurements: o.measurements});
+      S.predicted = r.positions; o.motion = r.motion;
+    } catch (e) {}
+  } else if (o) o.motion = null;
+  renderObjects(); draw();
+}
+let reportTimer = null;
+function objectsChanged() {
+  saveLocal(); renderObjects(); draw(); refreshButtons();
+  clearTimeout(reportTimer); reportTimer = setTimeout(refreshReport, 150);
+  refreshPrediction();
+}
+async function refreshReport() {
+  if (!S.ws) return;
+  const objs = S.objects.filter(o => o.measurements.length);
+  if (!objs.length) { $("report").value = ""; $("problems").replaceChildren(); refreshButtons(); return; }
+  try {
+    await pushSettings();
+    const r = await post(`/api/ws/${S.ws.id}/report`, {objects: objs.map(o => ({designation: o.designation.trim(), measurements: o.measurements}))});
+    $("report").value = r.text;
+    const ul = $("problems"); ul.replaceChildren();
+    ul.className = r.problems.length ? "" : "fine";
+    if (r.problems.length) r.problems.forEach(p => ul.append(el("li", {text: p})));
+    else ul.append(el("li", {text: "✓ Format checks passed."}));
+  } catch (e) { $("report").value = ""; $("problems").replaceChildren(el("li", {text: e.message})); $("problems").className = ""; }
+  refreshButtons();
+}
+async function measureClick(ax, ay) {
+  if (!S.ws.reduced) { msg("Run Data reduction first — positions need an astrometric solution.", "err"); return; }
+  if (S.showStack) { msg("Measure on the individual images, not on the stack.", "err"); return; }
+  let o = activeObj(); if (!o) o = newObject();
+  try {
+    const m = await post(`/api/ws/${S.ws.id}/measure`, {frame: S.cur, x: ax, y: ay});
+    o.measurements = o.measurements.filter(x => x.frame !== S.cur).concat([m]).sort((a, b) => a.frame - b.frame);
+    objectsChanged();
+    const q = m.ok ? "good" : "err";
+    msg(`${o.designation} · image ${S.cur + 1}: RA ${m.ra_hms}  Dec ${m.dec_dms}  mag ${fmt(m.mag, 1)}  SNR ${fmt(m.snr, 1)}  FWHM ${fmt(m.fwhm_arcsec, 2)}″` + (m.note ? ` — ${m.note}` : ""), q);
+  } catch (e) { msg(e.message, "err"); }
+}
+async function measureKnown(k) {
+  await busy(`Measuring ${k.name}`, async () => {
+    const ms = [];
+    for (const p of k.positions) {
+      const f = S.ws.frames[p.frame];
+      if (p.x < 0 || p.y < 0 || p.x >= f.width || p.y >= f.height) continue;
+      const m = await post(`/api/ws/${S.ws.id}/measure`, {frame: p.frame, x: p.x, y: p.y});
+      if (m.ok && Math.hypot(m.x - p.x, m.y - p.y) < 12) ms.push(m);
+    }
+    if (!ms.length) { msg(`${k.name} is not visible at its predicted position (too faint?).`, "err"); return; }
+    newObject(k.number ? String(k.number) : k.name, ms, true);
+    goTo(ms[0].frame, ms[0].x, ms[0].y);
+    msg(`${k.name}: measured in ${ms.length} of ${k.positions.length} images — blink to confirm.`, "good");
+  });
+}
+
+/* ---------- rendering: sidebar ---------- */
+function renderAll() { renderTabs(); renderFrames(); renderObjects(); renderCands(); renderKnown(); refreshButtons(); draw(); refreshReport(); }
+function refreshButtons() {
+  const has = !!S.ws, red = has && S.ws.reduced, rep = $("report").value.length > 0;
+  $("btnReduce").disabled = !has || S.busy; $("btnDetect").disabled = !red || S.busy;
+  $("btnBlink").disabled = !has; $("btnNew").disabled = !red;
+  $("btnStack").disabled = !red || S.busy;
+  const o = activeObj(); $("btnStackObj").disabled = !(o && o.motion);
+  for (const id of ["btnCopy", "btnCopy2", "btnSave"]) $(id).disabled = !rep;
+  $("btnOpen").disabled = S.busy;
+  $("btnReduce").classList.toggle("primary", has && !red);
+}
+function renderTabs() {
+  const t = $("tabs"); t.replaceChildren();
+  if (!S.ws) return;
+  S.ws.frames.forEach((f, i) => t.append(el("button", {class: (!S.showStack && i === S.cur) ? "cur" : "", text: String(i + 1), title: f.file,
+    onclick: () => { stopBlink(); S.showStack = false; setFrame(i); }})));
+  if (S.stackImg) t.append(el("button", {class: S.showStack ? "cur" : "", text: "Stack", onclick: () => { stopBlink(); S.showStack = true; renderTabs(); draw(); }}));
+}
+function renderFrames() {
+  const tb = $("frames").tBodies[0]; tb.replaceChildren();
+  $("frames").hidden = !S.ws; $("warnings").replaceChildren();
+  if (!S.ws) return;
+  for (const f of S.ws.frames) {
+    const r = f.reduction || {};
+    tb.append(el("tr", {}, el("td", {text: String(f.index + 1)}), el("td", {class: "mono", text: f.time_utc.replace("T", " ").slice(0, 21)}),
+      el("td", {text: r.n_matched != null ? String(r.n_matched) : "–"}), el("td", {text: fmt(r.rms_arcsec, 3)}),
+      el("td", {text: fmt(r.fwhm_arcsec, 2)}), el("td", {text: fmt(r.zeropoint, 2)})));
+  }
+  for (const w of S.ws.warnings || []) $("warnings").append(el("p", {class: "warn", text: "⚠ " + w}));
+}
+function renderObjects() {
+  const box = $("objects"); box.replaceChildren();
+  $("nObj").textContent = String(S.objects.length);
+  if (!S.ws) return;
+  for (const o of S.objects) {
+    const inp = el("input", {type: "text", value: o.designation, maxlength: "12", "aria-label": "designation"});
+    inp.addEventListener("change", () => { o.designation = inp.value.trim() || o.designation; objectsChanged(); });
+    inp.addEventListener("click", ev => ev.stopPropagation());
+    const meta = o.motion ? `${fmt(o.motion.rate, 2)}″/min · PA ${fmt(o.motion.pa, 0)}°` : `${o.measurements.length}/${S.ws.frames.length} images`;
+    const head = el("div", {class: "oh"}, inp, el("span", {class: "tag " + (o.known ? "known" : "new"), text: o.known ? "known" : "new"}),
+      el("span", {class: "meta", text: meta}),
+      el("button", {class: "small", text: "✕", title: "Remove object", onclick: ev => { ev.stopPropagation();
+        S.objects = S.objects.filter(x => x !== o); if (S.active === o.id) S.active = S.objects.length ? S.objects[0].id : null; objectsChanged(); }}));
+    const tb = el("tbody");
+    S.ws.frames.forEach((f, i) => {
+      const m = o.measurements.find(x => x.frame === i);
+      if (!m) { tb.append(el("tr", {}, el("td", {text: String(i + 1)}), el("td", {class: "miss", colspan: "5", text: "not measured"}), el("td"))); return; }
+      const tr = el("tr", {style: "cursor:pointer", title: "Show in image"},
+        el("td", {text: String(i + 1)}), el("td", {class: "mono", text: m.ra_hms}), el("td", {class: "mono", text: m.dec_dms}),
+        el("td", {text: fmt(m.mag, 1)}), el("td", {class: (m.snr || 0) < 5 ? "bad" : "", text: fmt(m.snr, 1)}), el("td", {text: fmt(m.fwhm_arcsec, 1)}),
+        el("td", {}, el("button", {class: "small", text: "✕", title: "Delete this measurement", onclick: ev => { ev.stopPropagation();
+          o.measurements = o.measurements.filter(x => x !== m); objectsChanged(); }})));
+      tr.addEventListener("click", () => { S.active = o.id; goTo(i, m.x, m.y); refreshPrediction(); });
+      tb.append(tr);
+    });
+    const tbl = el("table", {}, el("thead", {}, el("tr", {}, ...["#", "RA", "Dec", "mag", "SNR", "FWHM″", ""].map(h => el("th", {text: h})))), tb);
+    const card = el("div", {class: "obj" + (o.id === S.active ? " active" : "")}, head, tbl);
+    card.addEventListener("click", () => { if (S.active !== o.id) { S.active = o.id; refreshPrediction(); } });
+    box.append(card);
+  }
+  if (!S.objects.length) box.append(el("p", {class: "hint", text: S.ws.reduced ? "No objects yet. Blink the images, then click the moving object in each one." : "Run Data reduction first."}));
+}
+function renderCands() {
+  const box = $("cands"); if (!S.cands.length && $("nCand").textContent === "–") return;
+  box.replaceChildren(); $("nCand").textContent = String(S.cands.length);
+  if (!S.cands.length) box.append(el("p", {class: "hint", text: "Nothing found automatically. Blink the images yourself — faint objects need a human eye."}));
+  for (const c of S.cands) {
+    const m0 = c.measurements[0];
+    box.append(el("div", {class: "item"},
+      el("div", {class: "t"}, el("div", {}, el("b", {text: `#${c.idx} `}), el("span", {class: "tag " + (c.known ? "known" : "new"), text: c.known || "unidentified"})),
+        el("div", {class: "dim", text: `${c.n} images · ${fmt(c.rate, 2)}″/min · PA ${fmt(c.pa, 0)}° · SNR ≥ ${fmt(c.min_snr, 1)} · mag ${fmt(m0.mag, 1)} · fit ${fmt(c.rms, 2)}″`})),
+      el("button", {class: "small", text: "Show", onclick: () => { goTo(m0.frame, m0.x, m0.y, 4); startBlink(); }}),
+      el("button", {class: "small", text: "Add", title: "Add to the report", onclick: () => {
+        newObject(c.known ? knownDesignation(c.known) : null, c.measurements.map(m => Object.assign({}, m)), !!c.known); goTo(m0.frame, m0.x, m0.y); }})));
+  }
+}
+function knownDesignation(name) {
+  const k = S.known.find(x => x.name === name);
+  return k && k.number ? String(k.number) : name;
+}
+function renderKnown() {
+  const box = $("knowns"); if (!S.known.length && $("nKnown").textContent === "–") return;
+  box.replaceChildren(); $("nKnown").textContent = String(S.known.length);
+  if (!S.known.length) box.append(el("p", {class: "hint", text: "No catalogued objects in this field (or the SkyBoT service is unreachable)."}));
+  for (const k of S.known) {
+    const p = k.positions[0];
+    box.append(el("div", {class: "item"},
+      el("div", {class: "t"}, el("div", {text: (k.number ? `(${k.number}) ` : "") + k.name}),
+        el("div", {class: "dim", text: `V ${fmt(k.vmag, 1)} · ${fmt(k.rate_arcsec_min, 2)}″/min · PA ${fmt(k.pa, 0)}°` + (k.pos_unc_arcsec > 5 ? ` · ±${fmt(k.pos_unc_arcsec, 0)}″` : "")})),
+      el("button", {class: "small", text: "Show", onclick: () => goTo(p.frame, p.x, p.y, 4)}),
+      el("button", {class: "small", text: "Measure", onclick: () => measureKnown(k)})));
+  }
+}
+
+/* ---------- rendering: viewer ---------- */
+const cImg = $("img"), cOvl = $("ovl"), stage = $("stage");
+let DPR = 1;
+function resize() {
+  DPR = window.devicePixelRatio || 1;
+  for (const c of [cImg, cOvl]) { c.width = Math.round(stage.clientWidth * DPR); c.height = Math.round(stage.clientHeight * DPR); }
+  draw();
+}
+const dims = () => S.ws ? {w: S.ws.frames[0].width, h: S.ws.frames[0].height} : {w: 1, h: 1};
+function fitView() {
+  const {w, h} = dims(), cw = stage.clientWidth, ch = stage.clientHeight;
+  S.zoom = Math.min(cw / w, ch / h); S.ox = (cw - w * S.zoom) / 2; S.oy = (ch - h * S.zoom) / 2;
+}
+function img2scr(ax, ay) {
+  const {w, h} = dims();
+  const u = S.flipX ? w - 1 - ax : ax, v = S.flipY ? h - 1 - ay : ay;
+  return [(u + 0.5) * S.zoom + S.ox, (v + 0.5) * S.zoom + S.oy];
+}
+function scr2img(sx, sy) {
+  const {w, h} = dims();
+  const u = (sx - S.ox) / S.zoom - 0.5, v = (sy - S.oy) / S.zoom - 0.5;
+  return [S.flipX ? w - 1 - u : u, S.flipY ? h - 1 - v : v];
+}
+function zoomAt(sx, sy, factor) {
+  const z = Math.min(40, Math.max(0.05, S.zoom * factor));
+  S.ox = sx - (sx - S.ox) * (z / S.zoom); S.oy = sy - (sy - S.oy) * (z / S.zoom); S.zoom = z; draw();
+}
+function goTo(frame, ax, ay, minZoom) {
+  S.showStack = false;
+  if (minZoom && S.zoom < minZoom) S.zoom = minZoom;
+  S.cur = frame;
+  const [sx, sy] = img2scr(ax, ay);
+  S.ox += stage.clientWidth / 2 - sx; S.oy += stage.clientHeight / 2 - sy;
+  renderTabs(); draw();
+}
+function setFrame(i) { S.cur = (i + S.ws.frames.length) % S.ws.frames.length; renderTabs(); draw(); }
+function marker(g, ax, ay, color, label, style) {
+  const [x, y] = img2scr(ax, ay); const r = Math.max(9, 3.2 * S.zoom) + (style === "box" ? 4 : 0);
+  g.strokeStyle = color; g.lineWidth = 1.6; g.setLineDash(style === "dash" ? [4, 4] : []);
+  g.beginPath();
+  if (style === "box") g.rect(x - r, y - r, 2 * r, 2 * r); else g.arc(x, y, r, 0, 2 * Math.PI);
+  g.stroke(); g.setLineDash([]);
+  if (label) {
+    g.font = "12px -apple-system, sans-serif"; g.lineWidth = 3; g.strokeStyle = "rgba(0,0,0,.85)";
+    // known objects label to the upper right, candidates lower left, report objects lower right
+    let lx = x + r + 4, ly = y - r + 2;
+    if (style === "dash") { lx = x - r - 4 - g.measureText(label).width; ly = y + r + 10; }
+    else if (style !== "box") ly = y + r + 10;
+    g.strokeText(label, lx, ly); g.fillStyle = color; g.fillText(label, lx, ly);
+  }
+}
+function draw() {
+  const g = cImg.getContext("2d"), o = cOvl.getContext("2d");
+  g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, cImg.width, cImg.height);
+  o.setTransform(1, 0, 0, 1, 0, 0); o.clearRect(0, 0, cOvl.width, cOvl.height);
+  stage.classList.toggle("inv", S.inv);
+  if (!S.ws) return;
+  const im = S.showStack ? S.stackImg : S.imgs[S.cur];
+  const {w, h} = dims();
+  if (im && im.complete && im.naturalWidth) {
+    g.imageSmoothingEnabled = S.zoom < 1.5;
+    g.setTransform(DPR * S.zoom * (S.flipX ? -1 : 1), 0, 0, DPR * S.zoom * (S.flipY ? -1 : 1),
+      DPR * (S.ox + (S.flipX ? w * S.zoom : 0)), DPR * (S.oy + (S.flipY ? h * S.zoom : 0)));
+    g.drawImage(im, 0, 0);
+  }
+  const f = S.ws.frames[S.cur], fi = $("frameinfo");
+  fi.hidden = false;
+  fi.textContent = S.showStack ? "Stack" : `Image ${S.cur + 1}/${S.ws.frames.length} · ${f.time_utc.replace("T", " ").slice(0, 19)} UTC`;
+  if (!S.marks || S.showStack) return;
+  o.setTransform(DPR, 0, 0, DPR, 0, 0);
+  for (const k of S.known) { const p = k.positions.find(p => p.frame === S.cur); if (p) marker(o, p.x, p.y, "#b48cff", (k.number ? `(${k.number}) ` : "") + k.name, "box"); }
+  const here = S.objects.map(ob => ob.measurements.find(m => m.frame === S.cur)).filter(Boolean);
+  for (const c of S.cands) {   // a candidate already in the report is drawn once, as the report object
+    const m = c.measurements.find(m => m.frame === S.cur);
+    if (m && !here.some(h => Math.hypot(h.x - m.x, h.y - m.y) < 3)) marker(o, m.x, m.y, "#5aa9ff", "#" + c.idx, "dash");
+  }
+  for (const ob of S.objects) {
+    const m = ob.measurements.find(m => m.frame === S.cur);
+    if (m) marker(o, m.x, m.y, ob.id === S.active ? "#f2b84b" : "#3ecf8e", ob.designation);
+  }
+  const a = activeObj();
+  if (S.predicted && a && !a.measurements.find(m => m.frame === S.cur) && S.predicted[S.cur]) {
+    const p = S.predicted[S.cur], [x, y] = img2scr(p.x, p.y);
+    o.strokeStyle = "#f2b84b"; o.lineWidth = 1.2; o.beginPath();
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { o.moveTo(x + dx * 8, y + dy * 8); o.lineTo(x + dx * 22, y + dy * 22); }
+    o.stroke();
+  }
+}
+function startBlink() {
+  if (!S.ws) return; stopBlink(); S.showStack = false;
+  S.blink = setInterval(() => setFrame(S.cur + 1), Number($("speed").value));
+  $("btnBlink").textContent = "⏸ Blink"; $("btnBlink").classList.add("on");
+}
+function stopBlink() { if (S.blink) clearInterval(S.blink); S.blink = null; $("btnBlink").textContent = "▶ Blink"; $("btnBlink").classList.remove("on"); }
+
+/* ---------- interaction ---------- */
+let drag = null;
+stage.addEventListener("pointerdown", e => { if (!S.ws) return; drag = {x: e.clientX, y: e.clientY, ox: S.ox, oy: S.oy, moved: false}; stage.setPointerCapture(e.pointerId); });
+stage.addEventListener("pointermove", e => {
+  if (!S.ws) return;
+  const r = stage.getBoundingClientRect();
+  const [ax, ay] = scr2img(e.clientX - r.left, e.clientY - r.top);
+  const {w, h} = dims();
+  $("cursor").textContent = (ax >= -0.5 && ay >= -0.5 && ax < w - 0.5 && ay < h - 0.5) ? `x ${ax.toFixed(1)}  y ${ay.toFixed(1)}  ·  ${S.zoom.toFixed(2)}×` : "";
+  if (!drag) return;
+  if (Math.hypot(e.clientX - drag.x, e.clientY - drag.y) > 4) drag.moved = true;
+  if (drag.moved) { S.ox = drag.ox + e.clientX - drag.x; S.oy = drag.oy + e.clientY - drag.y; draw(); }
+});
+stage.addEventListener("pointerup", e => {
+  if (!drag) return; const d = drag; drag = null;
+  if (d.moved) return;
+  const r = stage.getBoundingClientRect();
+  const [ax, ay] = scr2img(e.clientX - r.left, e.clientY - r.top);
+  const {w, h} = dims();
+  if (ax < 0 || ay < 0 || ax > w - 1 || ay > h - 1) return;
+  stopBlink(); measureClick(ax, ay);
+});
+stage.addEventListener("pointercancel", () => { drag = null; });
+stage.addEventListener("wheel", e => {
+  if (!S.ws) return; e.preventDefault();
+  const r = stage.getBoundingClientRect();
+  zoomAt(e.clientX - r.left, e.clientY - r.top, Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0022)));
+}, {passive: false});
+const center = () => [stage.clientWidth / 2, stage.clientHeight / 2];
+document.addEventListener("keydown", e => {
+  if (!S.ws || /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) || e.metaKey || e.ctrlKey) return;
+  const k = e.key;
+  if (k >= "1" && k <= "9" && Number(k) <= S.ws.frames.length) { stopBlink(); S.showStack = false; setFrame(Number(k) - 1); }
+  else if (k === "ArrowRight") { stopBlink(); S.showStack = false; setFrame(S.cur + 1); }
+  else if (k === "ArrowLeft") { stopBlink(); S.showStack = false; setFrame(S.cur - 1); }
+  else if (k === " ") { e.preventDefault(); S.blink ? stopBlink() : startBlink(); }
+  else if (k === "i") $("btnInvert").click();
+  else if (k === "m") $("btnMarks").click();
+  else if (k === "+" || k === "=") zoomAt(...center(), 1.4);
+  else if (k === "-") zoomAt(...center(), 1 / 1.4);
+  else if (k === "0") { fitView(); draw(); }
+});
+$("btnBlink").onclick = () => S.blink ? stopBlink() : startBlink();
+$("speed").oninput = () => { if (S.blink) startBlink(); };
+$("btnInvert").onclick = () => { S.inv = !S.inv; $("btnInvert").classList.toggle("on", S.inv); draw(); };
+$("btnMarks").onclick = () => { S.marks = !S.marks; $("btnMarks").classList.toggle("on", S.marks); draw(); };
+function flip(axis) {
+  const [ax, ay] = scr2img(...center());
+  if (axis === "x") S.flipX = !S.flipX; else S.flipY = !S.flipY;
+  const [sx, sy] = img2scr(ax, ay); const [cx, cy] = center();
+  S.ox += cx - sx; S.oy += cy - sy;
+  $("btnFlipX").classList.toggle("on", S.flipX); $("btnFlipY").classList.toggle("on", !S.flipY); draw();
+}
+$("btnFlipX").onclick = () => flip("x"); $("btnFlipY").onclick = () => flip("y");
+$("btnFit").onclick = () => { fitView(); draw(); };
+$("btnZoomIn").onclick = () => zoomAt(...center(), 1.4);
+$("btnZoomOut").onclick = () => zoomAt(...center(), 1 / 1.4);
+let cTimer = null;
+$("contrast").oninput = () => { S.hi = 63 - Number($("contrast").value); clearTimeout(cTimer); cTimer = setTimeout(() => { if (S.ws) loadImages(false); }, 200); };
+$("btnOpen").onclick = openPath;
+$("path").addEventListener("keydown", e => { if (e.key === "Enter") openPath(); });
+$("btnPick").onclick = () => $("file").click();
+$("file").onchange = e => uploadFiles([...e.target.files]);
+const drop = $("drop");
+drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("over"); });
+drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+drop.addEventListener("drop", e => { e.preventDefault(); drop.classList.remove("over"); uploadFiles([...e.dataTransfer.files]); });
+$("btnReduce").onclick = doReduce; $("btnDetect").onclick = doDetect; $("btnStack").onclick = doStack;
+$("btnNew").onclick = () => { newObject(); msg("New object — click it in each image."); };
+$("btnStackObj").onclick = () => { const o = activeObj(); if (o && o.motion) { $("stRate").value = o.motion.rate.toFixed(3); $("stPa").value = o.motion.pa.toFixed(1); } };
+async function copyReport() {
+  const t = $("report").value;
+  try { await navigator.clipboard.writeText(t); } catch (e) { $("report").select(); document.execCommand("copy"); }
+  msg("MPC report copied — paste it into the MPC Report box on your IASC team page.", "good");
+}
+$("btnCopy").onclick = copyReport; $("btnCopy2").onclick = copyReport;
+$("btnSave").onclick = () => {
+  const a = el("a", {href: URL.createObjectURL(new Blob([$("report").value], {type: "text/plain"})), download: "MPCReport.txt"});
+  a.click(); URL.revokeObjectURL(a.href);
+};
+$("preset").onchange = async () => {
+  fillSettings(S.presets[$("preset").value] || {}); applyPrefs(false);
+  saveLocal(); if (S.ws) { await pushSettings(); refreshReport(); }
+};
+for (const k of SETTING_IDS) $("s_" + k).addEventListener("change", () => { saveLocal(); if (S.ws) refreshReport(); });
+$("prefix").addEventListener("change", saveLocal);
+function applyPrefs(all) {
+  try {
+    const p = JSON.parse(localStorage.getItem("astrohunt:prefs") || "{}");
+    if (all && p.preset && S.presets[p.preset]) { $("preset").value = p.preset; fillSettings(S.presets[p.preset]); }
+    if (all && p.path) $("path").value = p.path;
+    if (p.prefix) $("prefix").value = p.prefix;
+    if (p.measurers) $("s_measurers").value = p.measurers;
+    if (p.contact) $("s_contact").value = p.contact;
+  } catch (e) {}
+}
+new ResizeObserver(resize).observe(stage);
+(async function init() {
+  try {
+    S.presets = await api("/api/presets");
+    const labels = {generic: "Generic telescope", ps1: "Pan-STARRS 1 (IASC, F51)", ps2: "Pan-STARRS 2 (IASC, F52)"};
+    for (const name of Object.keys(S.presets)) $("preset").append(el("option", {value: name, text: labels[name] || name}));
+    $("preset").value = "ps1"; fillSettings(S.presets.ps1 || {});
+    applyPrefs(true);
+  } catch (e) { msg("Backend not reachable: " + e.message, "err"); }
+  refreshButtons();
+})();
+</script>
+</body>
+</html>
