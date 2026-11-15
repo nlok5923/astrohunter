@@ -71,6 +71,24 @@ class PlateSolution:
     rms_arcsec: float         # consistency of the fit (the MPC metric)
     n_stars: int
     mag_zeropoint: float = np.nan   # cat_mag = mag_inst + zp, if calibrated
+    mag_scatter: float = np.nan     # robust scatter of the zero point (mag)
+
+    def sky2pix(self, ra, dec):
+        """Invert the plate solution (Newton iterations on the polynomial)."""
+        xi, eta = radec_to_standard(ra, dec, self.ra0, self.dec0)
+        xi = np.atleast_1d(xi)
+        eta = np.atleast_1d(eta)
+        M = np.array([[self.cx[1], self.cx[2]], [self.cy[1], self.cy[2]]])
+        Minv = np.linalg.inv(M)
+        x = np.zeros_like(xi)
+        y = np.zeros_like(eta)
+        for _ in range(6):
+            A = _design(x, y, self.order)
+            dx = np.vstack([xi - A @ self.cx, eta - A @ self.cy])
+            step = Minv @ dx
+            x = x + step[0]
+            y = y + step[1]
+        return x, y
 
     def pix2sky(self, x, y):
         A = _design(x, y, self.order)
@@ -147,16 +165,43 @@ def solve_frame(detections, wcs, cat_ra, cat_dec, cat_mag=None,
             f"cannot solve plate. Check WCS guess / catalogue overlap."
         )
 
-    mx = det_x[good]
-    my = det_y[good]
-    mra = np.asarray(cat_ra)[idx[good]]
-    mdec = np.asarray(cat_dec)[idx[good]]
-    sol = solve_plate(mx, my, mra, mdec, order=order)
+    # Iteratively clip mismatches / galaxies / high-proper-motion stars so a few
+    # bad pairs can't drag the plate constants (matters on real images).
+    # too few stars for the requested polynomial -> fall back to a lower order
+    while order > 1 and good.sum() < 3 * _design(np.array([0.0]), np.array([0.0]), order).shape[1]:
+        order -= 1
+    n_terms = _design(np.array([0.0]), np.array([0.0]), order).shape[1]
+    use = np.where(good)[0]
+    sol = None
+    for _ in range(4):
+        mx, my = det_x[use], det_y[use]
+        mra = np.asarray(cat_ra)[idx[use]]
+        mdec = np.asarray(cat_dec)[idx[use]]
+        sol = solve_plate(mx, my, mra, mdec, order=order)
+        fra, fdec = sol.pix2sky(mx, my)
+        res = np.hypot((fra - mra) * np.cos(np.radians(mdec)), fdec - mdec) * 3600.0
+        limit = max(2.5 * sol.rms_arcsec, 0.05)
+        keep = res <= limit
+        if keep.all() or keep.sum() < max(n_terms + 3, 6):
+            break
+        use = use[keep]
+    good = np.zeros_like(good)
+    good[use] = True
 
     if cat_mag is not None:
         cm = np.asarray(cat_mag, float)[idx[good]]
         inst = np.asarray(detections["mag_inst"], float)[good]
         valid = np.isfinite(cm) & np.isfinite(inst)
         if valid.sum() >= 3:
-            sol.mag_zeropoint = float(np.median(cm[valid] - inst[valid]))
+            d = (cm - inst)[valid]
+            zp = np.median(d)
+            for _ in range(3):   # clip saturated / blended / variable stars
+                mad = 1.4826 * np.median(np.abs(d - zp))
+                k = np.abs(d - zp) <= max(2.5 * mad, 0.05)
+                if k.sum() < 3:
+                    break
+                d = d[k]
+                zp = np.median(d)
+            sol.mag_zeropoint = float(zp)
+            sol.mag_scatter = float(1.4826 * np.median(np.abs(d - zp)))
     return sol, int(good.sum())

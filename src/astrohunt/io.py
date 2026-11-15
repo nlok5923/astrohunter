@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
@@ -83,6 +84,41 @@ def _read_time(header: fits.Header) -> Time:
     raise ValueError("No usable observation-time keyword (DATE-OBS/MJD-OBS) in header.")
 
 
+_WCS_KEY = re.compile(
+    r"^(CTYPE[12]|CRVAL[12]|CRPIX[12]|CUNIT[12]|CDELT[12]|CROTA[12]|CD[12]_[12]|"
+    r"PC[12]_[12]|PC00[12]00[12]|EQUINOX|RADESYS|RADECSYS|LONPOLE|LATPOLE|"
+    r"PV[12]_\d+|[AB]P?_ORDER|[AB]P?_\d_\d)$"
+)
+
+
+def _celestial_wcs(header: fits.Header):
+    """Primary celestial WCS from a header, ignoring everything else.
+
+    Survey headers (e.g. Pan-STARRS) carry alternate WCS systems and private
+    polynomial keywords (PCA1X0Y2...) that wcslib mis-parses as a singular
+    matrix, so only the standard primary-WCS cards are handed to astropy.
+    """
+    clean = fits.Header()
+    for card in header.cards:
+        if _WCS_KEY.match(card.keyword) and card.keyword not in clean:
+            clean[card.keyword] = card.value
+    if "CUNIT1" in clean and str(clean["CUNIT1"]).strip().lower() not in ("deg", "degree", "degrees"):
+        del clean["CUNIT1"]
+    if "CUNIT2" in clean and str(clean["CUNIT2"]).strip().lower() not in ("deg", "degree", "degrees"):
+        del clean["CUNIT2"]
+    clean["NAXIS"] = 2
+    for hdr in (clean, header):
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                w = WCS(hdr, naxis=2)
+            if w.has_celestial:
+                return w
+        except Exception:  # noqa: BLE001
+            continue
+    return None
+
+
 def load_frame(path: str | Path, index: int = 0, hdu: int = 0,
                allow_no_wcs: bool = False) -> Frame:
     path = str(path)
@@ -96,10 +132,8 @@ def load_frame(path: str | Path, index: int = 0, hdu: int = 0,
                     break
         data = np.asarray(h.data, dtype=float)
         header = h.header
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", FITSFixedWarning)
-            wcs = WCS(header)
-        if not wcs.has_celestial:
+        wcs = _celestial_wcs(header)
+        if wcs is None or not wcs.has_celestial:
             if not allow_no_wcs:
                 raise ValueError(
                     f"{path}: no celestial WCS in header. Plate-solve first "

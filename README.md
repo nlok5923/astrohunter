@@ -13,6 +13,52 @@ produces an **MPC-ready ADES report** — no GPU, runs natively on Apple Silicon
 > adversarially fact-checked). The MVP deliberately nails the *trusted,
 > deterministic core* first; ML real-bogus vetting and a review UI are Phase 2.
 
+## IASC campaigns on a Mac (Astrometrica replacement)
+
+Astrometrica is Windows-only. `astrohunt` runs the same workflow natively on macOS
+and writes the same **MPC 80-column report** that IASC asks you to paste into your
+team page.
+
+```bash
+pip install -e ".[web]"
+astrohunt serve --open          # workspace at http://127.0.0.1:8000
+```
+
+1. **Image set** — paste the folder (or `.zip`) with the 4 FITS images, keep the
+   configuration on *Pan-STARRS 1 (IASC, F51)* (the `PS1.cfg` equivalent; use PS2 for
+   F52 sets) and set your 3-letter designation prefix.
+2. **Data reduction** — matches the image stars to Gaia DR3 and solves every image
+   (typically 0.05″ RMS on PS1 frames). Works even when the header WCS is only rough.
+3. **Blink** (space bar), zoom with the scroll wheel, invert with `i`.
+   **Find moving objects** runs the automatic search and overlays catalogued
+   asteroids (SkyBoT).
+4. **Click the object in every image.** Each click fits the PSF and shows RA/Dec,
+   magnitude, SNR and FWHM; after two clicks a crosshair predicts where it should be next.
+5. **Copy MPC report** and paste it into the IASC team page.
+
+Headless first pass: `astrohunt iasc path/to/set --prefix ABC` prints what the
+automatic search found plus the report.
+
+| Astrometrica | astrohunt |
+|---|---|
+| Load images (FITS) | folder / zip / drag-and-drop |
+| `PS1.cfg` / `PS2.cfg` | configuration presets (F51 / F52 headers, extra-digit report) |
+| Data Reduction + Automatic Reference Star Match | Gaia DR3 with proper motions, ESA archive + VizieR mirrors, on-disk cache |
+| Blink, zoom, invert, flip, background/range | yes |
+| Known Object Overlay (MPCORB) | SkyBoT overlay, topocentric for the observatory code |
+| Moving Object Detection | automatic, with PSF/SNR gates and a static-source test |
+| Click-to-measure + Object Verification (SNR, FWHM, fit RMS) | yes, plus motion prediction and straight-line / brightness checks |
+| Track & Stack | view-only stack along any motion |
+| `MPCReport.txt` (80-column) | yes, incl. the "No moving objects detected" form; ADES PSV/XML too |
+| Dark / flat calibration, saving FITS, e-mailing reports | not implemented (IASC sets are already calibrated) |
+
+Validated on IASC's five public Pan-STARRS practice sets: every catalogued asteroid
+brighter than about V 21.3 was found automatically with no false candidates; fainter
+ones still need a human blinking the images. The reference catalogue is Gaia DR3
+(`NET Gaia DR3`), not the Gaia DR1 of IASC's Astrometrica build — positions agree far
+below a pixel, but **ask IASC whether they accept reports made with other software
+before relying on this in a campaign.**
+
 ## Why this exists
 Astrometrica is the incumbent IASC tool but is **Windows-only** and relies on
 **manual eyeball blinking**. `astrohunt` removes both bottlenecks: it's pure

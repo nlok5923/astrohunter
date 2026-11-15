@@ -29,9 +29,13 @@ def extract_sources(
     Centroid precision drives downstream astrometric accuracy, so we refine
     DAOStarFinder peaks with a centre-of-mass fit on small cutouts.
     """
-    mean, median, std = sigma_clipped_stats(data, sigma=3.0)
+    data = np.asarray(data, float)
+    bad = ~np.isfinite(data)
+    mean, median, std = sigma_clipped_stats(data[~bad] if bad.any() else data, sigma=3.0)
     if not np.isfinite(std) or std <= 0:
-        std = float(np.std(data)) or 1.0
+        std = float(np.nanstd(data)) or 1.0
+    if bad.any():   # masked / blank pixels (chip gaps on survey images) -> sky level
+        data = np.where(bad, median, data)
 
     finder = DAOStarFinder(fwhm=fwhm, threshold=threshold_sigma * std)
     with warnings.catch_warnings():
@@ -43,8 +47,10 @@ def extract_sources(
             dtype=[int, float, float, float, float, float, float],
         )
 
-    x = np.asarray(tbl["xcentroid"], dtype=float)
-    y = np.asarray(tbl["ycentroid"], dtype=float)
+    xcol = "x_centroid" if "x_centroid" in tbl.colnames else "xcentroid"
+    ycol = "y_centroid" if "y_centroid" in tbl.colnames else "ycentroid"
+    x = np.asarray(tbl[xcol], dtype=float)
+    y = np.asarray(tbl[ycol], dtype=float)
 
     if refine and len(x):
         box = int(2 * round(fwhm) + 1)

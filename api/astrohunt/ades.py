@@ -131,33 +131,20 @@ def _obs80_date(mjd: float) -> str:
 
 
 def tracklet_to_obs80(tracklet, meta: ObsMetadata, index: int):
-    lines = []
+    """80-column lines for one tracklet (see mpcreport.py for the full report)."""
+    from .mpcreport import ReportObs, format_obs_line
+
     desig = _trksub(index)  # temporary designation in cols 6-12
-    for k, d in enumerate(tracklet.detections):
-        ra_str = Angle(d.ra, u.deg).to_string(unit=u.hour, sep=" ", precision=2, pad=True)
-        dec_str = Angle(d.dec, u.deg).to_string(
-            unit=u.deg, sep=" ", precision=1, pad=True, alwayssign=True
+    return [
+        format_obs_line(
+            desig,
+            ReportObs(mjd=d.time_mjd, ra=d.ra, dec=d.dec,
+                      mag=d.mag if np.isfinite(d.mag) else None, band=meta.band,
+                      discovery=(k == 0)),
+            meta.obs_code,
         )
-        date_str = _obs80_date(d.time_mjd)
-        disc = "*" if k == 0 else " "
-        mag = f"{d.mag:4.1f}" if np.isfinite(d.mag) else "    "
-        line = (
-            f"{'':5}"            # cols 1-5: number (blank, unnumbered)
-            f"{desig:<7.7}"      # cols 6-12: temporary designation
-            f"{disc}"            # col 13: discovery asterisk
-            f"{' '}"             # col 14: note 1
-            f"{'C'}"             # col 15: note 2 (CCD)
-            f"{date_str:<17.17}" # cols 16-32: date
-            f"{ra_str:<12.12}"   # cols 33-44: RA
-            f"{dec_str:<12.12}"  # cols 45-56: Dec
-            f"{'':9}"            # cols 57-65: blank
-            f"{mag:<5.5} "       # cols 66-71: mag + band
-            f"{meta.band:1.1}"
-            f"{'':5}"            # cols 72-77: blank
-            f"{meta.obs_code:>3.3}"  # cols 78-80: obs code
-        )
-        lines.append(line[:80])
-    return lines
+        for k, d in enumerate(tracklet.detections)
+    ]
 
 
 def write_obs80(tracklets, meta: ObsMetadata, path: str) -> str:
